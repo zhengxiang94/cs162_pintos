@@ -69,10 +69,83 @@ pid_t process_execute(const char* file_name) {
   return tid;
 }
 
+/* Reserve stack space for userproc parameters, Fill the ARGV and ARGC into the STACK 
+e.g: The table below shows the state of the stack and the relevant registers right before the beginning of the user program, assuming PHYS_BASE is 0xc0000000
+ Address         Name         Data        Type
+0xbffffffc   argv[3][...]    bar\0       char[4]
+0xbffffff8   argv[2][...]    foo\0       char[4]
+0xbffffff5   argv[1][...]    -l\0        char[3]
+0xbfffffed   argv[0][...]    /bin/ls\0   char[8]
+0xbfffffec   stack-align       0         uint8_t
+0xbfffffe8   argv[4]           0         char *
+0xbfffffe4   argv[3]        0xbffffffc   char *
+0xbfffffe0   argv[2]        0xbffffff8   char *
+0xbfffffdc   argv[1]        0xbffffff5   char *
+0xbfffffd8   argv[0]        0xbfffffed   char *
+0xbfffffd4   argv           0xbfffffd8   char **
+0xbfffffd0   argc              4         int
+0xbfffffcc   return address    0         void (*) ()
+*/
+static void args_push(const char* file_name, void** if_esp) {
+  void* esp = *if_esp;
+
+  const int max_argv_size = 100;
+  char** argv = malloc(sizeof(char*) * max_argv_size);
+  char* rest = malloc(strlen(file_name) + 1);
+  strlcpy(rest, file_name, strlen(file_name) + 1);
+
+  char* token = NULL;
+  int args_size = 0;
+  int argc = 0;
+  while(token = strtok_r(rest, " ", &rest)){
+  int size = strlen(token) + 1;
+    esp -= size;
+    argv[argc] = esp;
+    strlcpy(esp, token, size);
+    args_size += size;
+    argc++;
+  }
+  args_size = args_size + sizeof(char*) * (argc + 1) + sizeof(char**) + sizeof(int);
+  int temp = args_size % 0x10;
+  if (temp > 0) {
+    int align_size = 0x10 - temp;
+    esp -= align_size;
+    memset(esp, 0, align_size);
+  }
+
+  esp -= 0x04;
+  *(char**)esp = 0;
+
+  for (int i = argc - 1; i >= 0; i--) {
+    esp -= sizeof(char*);
+    *(char**)esp = argv[i];
+  }
+  esp -= 0x04;
+  *(char***)esp = (esp + 0x04);
+  esp -= 0x04;
+  *(int*)esp = argc;
+
+  esp -= 0x04;
+  memset(esp, 0, 4);
+
+  free(argv);
+  *if_esp = esp;
+}
+
+static char* get_argv0_name(const char* file_name_)
+{
+  int size = strlen(file_name_) + 1;
+  char* file_name = malloc(size);
+  strlcpy(file_name, file_name_, size);
+  char* argv_0_name = strtok_r(file_name, " ", &file_name);
+  return argv_0_name;
+}
+
 /* A thread function that loads a user process and starts it
    running. */
 static void start_process(void* file_name_) {
   char* file_name = (char*)file_name_;
+  char* argv0_name = get_argv0_name(file_name);
   struct thread* t = thread_current();
   struct intr_frame if_;
   bool success, pcb_success;
@@ -90,7 +163,7 @@ static void start_process(void* file_name_) {
 
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
-    strlcpy(t->pcb->process_name, t->name, sizeof t->name);
+    strlcpy(t->pcb->process_name, argv0_name, strlen(argv0_name)+1);
   }
 
   /* Initialize interrupt frame and load executable. */
@@ -99,8 +172,10 @@ static void start_process(void* file_name_) {
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
-    success = load(file_name, &if_.eip, &if_.esp);
+    success = load(argv0_name, &if_.eip, &if_.esp);
+    args_push(file_name, &if_.esp);
   }
+  free(argv0_name);
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
   if (!success && pcb_success) {
@@ -118,9 +193,6 @@ static void start_process(void* file_name_) {
     sema_up(&temporary);
     thread_exit();
   }
-
-  /* Reserve stack space for userproc parameters */
-  if_.esp -= 0x14;
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
