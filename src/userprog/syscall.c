@@ -22,40 +22,51 @@ static bool is_validity(struct intr_frame* f, const uint8_t* uaddr) {
 }
 
 static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
-  f->eax = -1;
-  // f->eax = process_execute(cmd_line);
+  if (!is_validity(f, cmd_line) || !is_validity(f, cmd_line + 0x04))
+    return;
+  pid_t pid = process_execute(cmd_line);
+  if (pid < 0) {
+    syscall_exit(f, -1);
+    return;
+  }
+
+  struct thread* child_thread = get_thread(pid);
+  sema_down(&child_thread->load_semaph);
+  if (!child_thread->load_success) {
+    f->eax = -1;
+    return;
+  }
+  f->eax = pid;
 }
 
 static void syscall_wait(struct intr_frame* f, pid_t pid) {
-  f->eax = -1;
-  //f->eax = process_wait(pid);
-}
-
-static void syscall_create(struct intr_frame* f, const char* file, unsigned initial_size) {
-  if (file == NULL) {
+  int ret = process_wait(pid);
+  if (ret < 0) {
     f->eax = 0;
     return;
   }
+  f->eax = ret;
+}
+
+static void syscall_create(struct intr_frame* f, const char* file, unsigned initial_size) {
+  if (!is_validity(f, file))
+    return;
   f->eax = filesys_create(file, initial_size);
 }
 
 static void syscall_remove(struct intr_frame* f, const char* file) {
-  if (file == NULL) {
-    f->eax = 0;
+  if (!is_validity(f, file))
     return;
-  }
   f->eax = filesys_remove(file);
 }
 
 static void syscall_open(struct intr_frame* f, const char* file) {
-  if (file == NULL) {
-    f->eax = -1;
+  if (!is_validity(f, file))
     return;
-  }
 
   struct file* opened_file = filesys_open(file);
   if (opened_file == NULL) {
-    f->eax = -1;
+    syscall_exit(f, -1);
     return;
   }
   f->eax = inode_get_inumber(file_get_inode(opened_file));
@@ -71,6 +82,8 @@ static void syscall_fileSize(struct intr_frame* f, int fd) {
 }
 
 static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned size) {
+  if (!is_validity(f, buffer))
+    return;
   if (fd == 0) {
     char** buffer_vector = (char**)buffer;
     for (int i = 0; i < size; i++) {
@@ -89,6 +102,8 @@ static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned si
 }
 
 static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsigned size) {
+  if (!is_validity(f, buffer))
+    return;
   if (fd == 1) {
     putbuf((const char*)buffer, size);
     f->eax = size;

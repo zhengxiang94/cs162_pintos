@@ -97,8 +97,8 @@ static void args_push(const char* file_name, void** if_esp) {
   char* token = NULL;
   int args_size = 0;
   int argc = 0;
-  while(token = strtok_r(rest, " ", &rest)){
-  int size = strlen(token) + 1;
+  while (token = strtok_r(rest, " ", &rest)) {
+    int size = strlen(token) + 1;
     esp -= size;
     argv[argc] = esp;
     strlcpy(esp, token, size);
@@ -132,8 +132,7 @@ static void args_push(const char* file_name, void** if_esp) {
   *if_esp = esp;
 }
 
-static char* get_argv0_name(const char* file_name_)
-{
+static char* get_argv0_name(const char* file_name_) {
   int size = strlen(file_name_) + 1;
   char* file_name = malloc(size);
   strlcpy(file_name, file_name_, size);
@@ -163,7 +162,7 @@ static void start_process(void* file_name_) {
 
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
-    strlcpy(t->pcb->process_name, argv0_name, strlen(argv0_name)+1);
+    strlcpy(t->pcb->process_name, argv0_name, strlen(argv0_name) + 1);
   }
 
   /* Initialize interrupt frame and load executable. */
@@ -172,10 +171,10 @@ static void start_process(void* file_name_) {
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
-    success = load(argv0_name, &if_.eip, &if_.esp);
-    args_push(file_name, &if_.esp);
+    t->load_success = success = load(argv0_name, &if_.eip, &if_.esp);
   }
-  free(argv0_name);
+
+  sema_up(&t->load_semaph);
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
   if (!success && pcb_success) {
@@ -187,10 +186,15 @@ static void start_process(void* file_name_) {
     free(pcb_to_free);
   }
 
+  if (success) {
+    args_push(file_name, &if_.esp);
+    free(argv0_name);
+  }
+
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(file_name);
   if (!success) {
-    sema_up(&temporary);
+    sema_up(&t->semaph);
     thread_exit();
   }
 
@@ -213,9 +217,27 @@ static void start_process(void* file_name_) {
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-int process_wait(pid_t child_pid UNUSED) {
-  sema_down(&temporary);
-  return 0;
+int process_wait(pid_t child_pid) {
+  struct thread* t = get_thread((tid_t)child_pid);
+  if (t == NULL)
+    return -1;
+
+  if (t->status == THREAD_DYING)
+    return -1;
+
+  struct process* pcb = t->pcb;
+  if (pcb == NULL) {
+    sema_down(&t->semaph);
+    return t->stack;
+  }
+
+  pid_t pid = get_pid(pcb);
+  tid_t current_tid = thread_tid();
+  if (pid != current_tid)
+    return -1;
+
+  sema_down(&t->semaph);
+  return *t->stack;
 }
 
 /* Free the current process's resources. */
@@ -253,7 +275,7 @@ void process_exit(void) {
   cur->pcb = NULL;
   free(pcb_to_free);
 
-  sema_up(&temporary);
+  sema_up(&cur->semaph);
   thread_exit();
 }
 

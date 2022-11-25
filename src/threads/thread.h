@@ -96,6 +96,9 @@ struct thread {
 #ifdef USERPROG
   /* Owned by process.c. */
   struct process* pcb; /* Process control block if this thread is a userprog */
+  struct semaphore semaph;
+  struct semaphore load_semaph;
+  bool load_success;
 #endif
 
   /* Owned by thread.c. */
@@ -131,6 +134,7 @@ void thread_block(void);
 void thread_unblock(struct thread*);
 
 struct thread* thread_current(void);
+struct thread* get_thread(tid_t);
 tid_t thread_tid(void);
 const char* thread_name(void);
 
