@@ -66,6 +66,11 @@ pid_t process_execute(const char* file_name) {
   tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
+  struct thread* child_thread = get_thread(tid);
+  if (child_thread != NULL) {
+    sema_down(&child_thread->load_semaph);
+    child_thread->parent_tid = thread_tid();
+  }
   return tid;
 }
 
@@ -221,23 +226,20 @@ int process_wait(pid_t child_pid) {
   struct thread* t = get_thread((tid_t)child_pid);
   if (t == NULL)
     return -1;
-
   if (t->status == THREAD_DYING)
     return -1;
 
-  struct process* pcb = t->pcb;
-  if (pcb == NULL) {
-    sema_down(&t->semaph);
-    return t->stack;
-  }
-
-  pid_t pid = get_pid(pcb);
-  tid_t current_tid = thread_tid();
-  if (pid != current_tid)
+  if (t->already_wait)
     return -1;
 
+  t->already_wait = true;
+  pid_t pid = t->parent_tid;
+  tid_t cur_tid = thread_tid();
+  if (pid != cur_tid)
+    return -1;
   sema_down(&t->semaph);
-  return *t->stack;
+  int ret = t->ret_status;
+  return ret;
 }
 
 /* Free the current process's resources. */
@@ -245,6 +247,7 @@ void process_exit(void) {
   struct thread* cur = thread_current();
   uint32_t* pd;
 
+  sema_up(&cur->semaph);
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
@@ -275,7 +278,6 @@ void process_exit(void) {
   cur->pcb = NULL;
   free(pcb_to_free);
 
-  sema_up(&cur->semaph);
   thread_exit();
 }
 

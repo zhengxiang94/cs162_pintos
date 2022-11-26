@@ -99,6 +99,9 @@ struct thread {
   struct semaphore semaph;
   struct semaphore load_semaph;
   bool load_success;
+  int ret_status;
+  bool already_wait;
+  tid_t parent_tid; /* Tid of parent */
 #endif
 
   /* Owned by thread.c. */

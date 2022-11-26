@@ -8,7 +8,10 @@
 
 static void syscall_exit(struct intr_frame* f, int status) {
   f->eax = status;
-  printf("%s: exit(%d)\n", thread_current()->pcb->process_name, status);
+  struct thread* cur = thread_current();
+  if (cur != NULL)
+    cur->ret_status = status;
+  printf("%s: exit(%d)\n", cur->pcb->process_name, status);
   process_exit();
 }
 
@@ -25,15 +28,14 @@ static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
   if (!is_validity(f, cmd_line) || !is_validity(f, cmd_line + 0x04))
     return;
   pid_t pid = process_execute(cmd_line);
-  if (pid < 0) {
+  if (pid == TID_ERROR) {
     syscall_exit(f, -1);
     return;
   }
 
   struct thread* child_thread = get_thread(pid);
-  sema_down(&child_thread->load_semaph);
-  if (!child_thread->load_success) {
-    f->eax = -1;
+  if (child_thread == NULL || !child_thread->load_success) {
+    f->eax = TID_ERROR;
     return;
   }
   f->eax = pid;
@@ -41,8 +43,8 @@ static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
 
 static void syscall_wait(struct intr_frame* f, pid_t pid) {
   int ret = process_wait(pid);
-  if (ret < 0) {
-    f->eax = 0;
+  if (ret == TID_ERROR) {
+    f->eax = -1;
     return;
   }
   f->eax = ret;
