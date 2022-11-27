@@ -294,7 +294,7 @@ struct thread* get_thread(tid_t tid) {
       return t;
     }
   }
-  intr_disable();
+  intr_enable();
   return NULL;
 }
 

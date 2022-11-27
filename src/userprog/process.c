@@ -20,6 +20,13 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+/* file linked list */
+struct file_list_elem {
+  struct list_elem elem;
+  int fd;
+  struct file* file;
+};
+
 static struct semaphore temporary;
 static thread_func start_process NO_RETURN;
 static thread_func start_pthread NO_RETURN;
@@ -164,6 +171,10 @@ static void start_process(void* file_name_) {
     // does not try to activate our uninitialized pagedir
     new_pcb->pagedir = NULL;
     t->pcb = new_pcb;
+
+    // Init files list
+    list_init(&t->pcb->all_files_list);
+    t->pcb->next_fd = 2;
 
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
@@ -661,3 +672,51 @@ void pthread_exit(void) {}
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
 void pthread_exit_main(void) {}
+
+/* Insert into the files list and return fd*/
+int get_file_fd(struct file* file) {
+  struct process* pcb = thread_current()->pcb;
+  if (pcb == NULL)
+    return -1;
+
+  struct file_list_elem* e = malloc(sizeof(struct file_list_elem));
+  e->fd = pcb->next_fd++;
+  e->file = file;
+  list_push_back(&pcb->all_files_list, &e->elem);
+  return e->fd;
+}
+
+/* Returns the open file with file descriptor fd. 
+Returns -1 if fd does not correspond to an entry in the file descriptor table. */
+struct file* get_file(int fd) {
+  struct process* pcb = thread_current()->pcb;
+  if (pcb == NULL)
+    return -1;
+
+  struct list_elem* e;
+  for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
+       e = list_next(e)) {
+    struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
+    if (file_list_elem->fd == fd) 
+      return file_list_elem->file;
+  }
+  return NULL;
+}
+
+bool close_file(int fd) {
+  struct process* pcb = thread_current()->pcb;
+  if (pcb == NULL)
+    return -1;
+
+  struct list_elem* e;
+  for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
+       e = list_next(e)) {
+    struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
+    if (file_list_elem->fd == fd) {
+      file_close(file_list_elem->file);
+      list_remove(e);
+      return true;
+    }
+  }
+  return false;
+}

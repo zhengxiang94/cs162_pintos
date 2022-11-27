@@ -2,6 +2,7 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
+#include "filesys/filesys.h"
 #include <stdint.h>
 
 // At most 8MB can be allocated to the stack
@@ -27,10 +28,12 @@ struct process {
   uint32_t* pagedir;          /* Page directory. */
   char process_name[16];      /* Name of the main thread */
   struct thread* main_thread; /* Pointer to main thread */
+  int next_fd;                /* The fd of the next time the file is opened */
+  struct list all_files_list; /* files list */
 };
 
 void userprog_init(void);
- 
+
 pid_t process_execute(const char* file_name);
 int process_wait(pid_t);
 void process_exit(void);
@@ -43,5 +46,9 @@ tid_t pthread_execute(stub_fun, pthread_fun, void*);
 tid_t pthread_join(tid_t);
 void pthread_exit(void);
 void pthread_exit_main(void);
+
+int get_file_fd(struct file* file);
+struct file* get_file(int fd);
+bool close_file(int fd);
 
 #endif /* userprog/process.h */

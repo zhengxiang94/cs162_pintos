@@ -68,19 +68,19 @@ static void syscall_open(struct intr_frame* f, const char* file) {
 
   struct file* opened_file = filesys_open(file);
   if (opened_file == NULL) {
-    syscall_exit(f, -1);
-    return;
-  }
-  f->eax = inode_get_inumber(file_get_inode(opened_file));
-}
-
-static void syscall_fileSize(struct intr_frame* f, int fd) {
-  struct inode* inode = inode_open(fd);
-  if (inode == NULL) {
     f->eax = -1;
     return;
   }
-  return inode_length(inode);
+  f->eax = get_file_fd(opened_file);
+}
+
+static void syscall_file_size(struct intr_frame* f, int fd) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
+    f->eax = -1;
+    return;
+  }
+  f->eax = file_length(file);
 }
 
 static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned size) {
@@ -95,12 +95,12 @@ static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned si
     f->eax = size;
     return;
   }
-  struct inode* inode = inode_open(fd);
-  if (fd == NULL) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
     f->eax = -1;
     return;
   }
-  f->eax = inode_read_at(inode, buffer, size, 0);
+  f->eax = file_read(file, buffer, size);
 }
 
 static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsigned size) {
@@ -111,39 +111,37 @@ static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsi
     f->eax = size;
     return;
   }
-  struct inode* inode = inode_open(fd);
-  if (fd == NULL) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
     f->eax = -1;
     return;
   }
-  f->eax = inode_write_at(inode, buffer, size, 0);
+  f->eax = file_write(file, buffer, size);
 }
 
 static void syscall_seek(struct intr_frame* f, int fd, unsigned position) {
-  struct file* opened_file = file_open(inode_open(fd));
-  if (opened_file == NULL) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
     f->eax = -1;
     return;
   }
-  f->eax = file_seek(opened_file, position);
+  f->eax = file_seek(file, position);
 }
 
 static void syscall_tell(struct intr_frame* f, int fd) {
-  struct file* opened_file = file_open(inode_open(fd));
-  if (opened_file == NULL) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
     f->eax = -1;
     return;
   }
-  f->eax = file_tell(opened_file);
+  f->eax = file_tell(file);
 }
 
 static void syscall_close(struct intr_frame* f, int fd) {
-  struct file* opened_file = file_open(inode_open(fd));
-  if (opened_file == NULL) {
+  if (!close_file(fd)) {
     f->eax = -1;
     return;
   }
-  file_close(opened_file);
 }
 
 static void syscall_handler(struct intr_frame*);
@@ -211,7 +209,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       syscall_open(f, args[1]);
       break;
     case SYS_FILESIZE:
-      syscall_fileSize(f, args[1]);
+      syscall_file_size(f, args[1]);
       break;
     case SYS_READ:
       syscall_read(f, args[1], args[2], args[3]);
