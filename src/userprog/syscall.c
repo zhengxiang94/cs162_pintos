@@ -1,12 +1,9 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
-#include "threads/interrupt.h"
-#include "threads/thread.h"
-#include "threads/vaddr.h"
-#include "userprog/process.h"
 
-static void syscall_exit(struct intr_frame* f, int status) {
+
+void syscall_exit(struct intr_frame* f, int status) {
   f->eax = status;
   struct thread* cur = thread_current();
   if (cur != NULL)
