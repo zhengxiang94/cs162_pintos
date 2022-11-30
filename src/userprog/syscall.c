@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 
-
 void syscall_exit(struct intr_frame* f, int status) {
   f->eax = status;
   struct thread* cur = thread_current();
@@ -92,12 +91,7 @@ static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned si
     f->eax = size;
     return;
   }
-  struct file* file = get_file(fd);
-  if (file == NULL) {
-    f->eax = -1;
-    return;
-  }
-  f->eax = file_read(file, buffer, size);
+  f->eax = read_for_syscall(fd, buffer, size);
 }
 
 static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsigned size) {
@@ -113,7 +107,9 @@ static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsi
     f->eax = -1;
     return;
   }
-  f->eax = file_write(file, buffer, size);
+
+  off_t write_size = file_write(file, buffer, size);
+  f->eax = write_size;
 }
 
 static void syscall_seek(struct intr_frame* f, int fd, unsigned position) {

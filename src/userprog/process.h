@@ -28,6 +28,7 @@ struct process {
   uint32_t* pagedir;          /* Page directory. */
   char process_name[16];      /* Name of the main thread */
   struct thread* main_thread; /* Pointer to main thread */
+  struct file* file;          /* Load process file */
   int next_fd;                /* The fd of the next time the file is opened */
   struct list all_files_list; /* files list */
 };

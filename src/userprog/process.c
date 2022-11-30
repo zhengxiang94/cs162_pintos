@@ -25,6 +25,7 @@ struct file_list_elem {
   struct list_elem elem;
   int fd;
   struct file* file;
+  struct lock lock;
 };
 
 static struct semaphore temporary;
@@ -268,6 +269,7 @@ void process_exit(void) {
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pcb->pagedir;
+  file_allow_write(cur->pcb->file);
   if (pd != NULL) {
     /* Correct ordering here is crucial.  We must set
          cur->pcb->pagedir to NULL before switching page directories,
@@ -468,7 +470,11 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
+  if (success) {
+    file_deny_write(file);
+    t->pcb->file = file;
+  } else
+    file_close(file);
   return success;
 }
 
@@ -682,7 +688,10 @@ int get_file_fd(struct file* file) {
   struct file_list_elem* e = malloc(sizeof(struct file_list_elem));
   e->fd = pcb->next_fd++;
   e->file = file;
+  lock_init(&e->lock);
+  intr_disable();
   list_push_back(&pcb->all_files_list, &e->elem);
+  intr_enable();
   return e->fd;
 }
 
@@ -694,13 +703,16 @@ struct file* get_file(int fd) {
     return -1;
 
   struct list_elem* e;
+  struct file* file = NULL;
   for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
        e = list_next(e)) {
     struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
-    if (file_list_elem->fd == fd) 
-      return file_list_elem->file;
+    if (file_list_elem->fd == fd) {
+      file = file_list_elem->file;
+      break;
+    }
   }
-  return NULL;
+  return file;
 }
 
 bool close_file(int fd) {
@@ -709,14 +721,42 @@ bool close_file(int fd) {
     return -1;
 
   struct list_elem* e;
+  bool ret = false;
+  intr_disable();
   for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
        e = list_next(e)) {
     struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
     if (file_list_elem->fd == fd) {
       file_close(file_list_elem->file);
       list_remove(e);
-      return true;
+      ret = true;
+      break;
     }
   }
-  return false;
+  intr_enable();
+  return ret;
+}
+
+int read_for_syscall(int fd, void* buffer, unsigned size) {
+  struct process* pcb = thread_current()->pcb;
+  if (pcb == NULL)
+    return -1;
+
+  struct list_elem* e;
+  struct file* file = NULL;
+  for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
+       e = list_next(e)) {
+    struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
+    if (file_list_elem->fd == fd) {
+      file = file_list_elem->file;
+      if (file == NULL)
+        break;
+
+      lock_acquire(&file_list_elem->lock);
+      int n = file_read(file, buffer, size);
+      lock_release(&file_list_elem->lock);
+      return n;
+    }
+  }
+  return -1;
 }
