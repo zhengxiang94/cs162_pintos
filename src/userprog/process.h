@@ -31,6 +31,7 @@ struct process {
   struct file* file;          /* Load process file */
   int next_fd;                /* The fd of the next time the file is opened */
   struct list all_files_list; /* files list */
+  struct lock file_list_lock; /* files list lock */
 };
 
 void userprog_init(void);
@@ -51,5 +52,9 @@ void pthread_exit_main(void);
 int get_file_fd(struct file* file);
 struct file* get_file(int fd);
 bool close_file(int fd);
+int read_for_syscall(int fd, void* buffer, unsigned size);
+int open_for_syscall(const char* file);
+int write_for_syscall(int fd, const void* buffer, unsigned size);
+void set_ret_status(struct thread* t, int status);
 
 #endif /* userprog/process.h */

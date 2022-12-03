@@ -5,8 +5,7 @@
 void syscall_exit(struct intr_frame* f, int status) {
   f->eax = status;
   struct thread* cur = thread_current();
-  if (cur != NULL)
-    cur->ret_status = status;
+  set_ret_status(cur, status);
   printf("%s: exit(%d)\n", cur->pcb->process_name, status);
   process_exit();
 }
@@ -35,6 +34,7 @@ static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
     return;
   }
   f->eax = pid;
+  //printf("pid %d\n", pid);
 }
 
 static void syscall_wait(struct intr_frame* f, pid_t pid) {
@@ -61,13 +61,7 @@ static void syscall_remove(struct intr_frame* f, const char* file) {
 static void syscall_open(struct intr_frame* f, const char* file) {
   if (!is_validity(f, file))
     return;
-
-  struct file* opened_file = filesys_open(file);
-  if (opened_file == NULL) {
-    f->eax = -1;
-    return;
-  }
-  f->eax = get_file_fd(opened_file);
+  f->eax = open_for_syscall(file);
 }
 
 static void syscall_file_size(struct intr_frame* f, int fd) {
@@ -99,17 +93,10 @@ static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsi
     return;
   if (fd == 1) {
     putbuf((const char*)buffer, size);
-    f->eax = size;
+    f->eax = size; 
     return;
   }
-  struct file* file = get_file(fd);
-  if (file == NULL) {
-    f->eax = -1;
-    return;
-  }
-
-  off_t write_size = file_write(file, buffer, size);
-  f->eax = write_size;
+  f->eax = write_for_syscall(fd, buffer, size);
 }
 
 static void syscall_seek(struct intr_frame* f, int fd, unsigned position) {

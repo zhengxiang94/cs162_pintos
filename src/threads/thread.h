@@ -7,6 +7,8 @@
 #include "threads/synch.h"
 #include "threads/fixed-point.h"
 
+#define USERPROG
+
 /* States in a thread's life cycle. */
 enum thread_status {
   THREAD_RUNNING, /* Running thread. */
@@ -96,12 +98,8 @@ struct thread {
 #ifdef USERPROG
   /* Owned by process.c. */
   struct process* pcb; /* Process control block if this thread is a userprog */
-  struct semaphore semaph;
   struct semaphore load_semaph;
   bool load_success;
-  int ret_status;
-  bool already_wait;
-  tid_t parent_tid; /* Tid of parent */
 #endif
 
   /* Owned by thread.c. */

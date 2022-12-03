@@ -25,14 +25,44 @@ struct file_list_elem {
   struct list_elem elem;
   int fd;
   struct file* file;
-  struct lock lock;
 };
 
-static struct semaphore temporary;
+struct thread_node {
+  struct list_elem elem;
+  tid_t tid;      /* current thread tid */
+  tid_t p_tid;    /* parent thread tid */
+  int ret_status; /* thread exit statuts */
+  bool already_wait;
+  struct semaphore semaph;
+};
+
+static struct list thread_nodes_list;
+static struct lock file_lock;
+static struct lock thread_lock;
 static thread_func start_process NO_RETURN;
 static thread_func start_pthread NO_RETURN;
 static bool load(const char* file_name, void (**eip)(void), void** esp);
 bool setup_thread(void (**eip)(void), void** esp);
+
+struct thread_node* get_thread_node(tid_t tid) {
+  lock_acquire(&thread_lock);
+  for (struct list_elem* e = list_begin(&thread_nodes_list); e != list_end(&thread_nodes_list);
+       e = list_next(e)) {
+    struct thread_node* node = list_entry(e, struct thread_node, elem);
+    if (node->tid == tid){
+      lock_release(&thread_lock);
+      return node;
+    }
+  }
+  lock_release(&thread_lock);
+  return NULL;
+}
+
+void set_ret_status(struct thread* t, int status) {
+  struct thread_node* node = get_thread_node(t->tid);
+  if (node != NULL)
+    node->ret_status = status;
+}
 
 /* Initializes user programs in the system by ensuring the main
    thread has a minimal PCB so that it can execute and wait for
@@ -49,6 +79,9 @@ void userprog_init(void) {
      can come at any time and activate our pagedir */
   t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
+  lock_init(&file_lock);
+  lock_init(&thread_lock);
+  list_init(&thread_nodes_list);
 
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
@@ -62,7 +95,6 @@ pid_t process_execute(const char* file_name) {
   char* fn_copy;
   tid_t tid;
 
-  sema_init(&temporary, 0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page(0);
@@ -70,14 +102,23 @@ pid_t process_execute(const char* file_name) {
     return TID_ERROR;
   strlcpy(fn_copy, file_name, PGSIZE);
 
+  // Init thread node elem
+  struct thread_node* thread_node = malloc(sizeof(struct thread_node));
+  thread_node->ret_status = -1;
+  thread_node->already_wait = false;
+  thread_node->p_tid = thread_tid();
+  sema_init(&thread_node->semaph, 0);
+  lock_acquire(&thread_lock);
+  list_push_back(&thread_nodes_list, &thread_node->elem);
+  lock_release(&thread_lock);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
+  thread_node->tid = tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
   struct thread* child_thread = get_thread(tid);
   if (child_thread != NULL) {
     sema_down(&child_thread->load_semaph);
-    child_thread->parent_tid = thread_tid();
   }
   return tid;
 }
@@ -175,6 +216,7 @@ static void start_process(void* file_name_) {
 
     // Init files list
     list_init(&t->pcb->all_files_list);
+    lock_init(&t->pcb->file_list_lock);
     t->pcb->next_fd = 2;
 
     // Continue initializing the PCB as normal
@@ -211,7 +253,6 @@ static void start_process(void* file_name_) {
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(file_name);
   if (!success) {
-    sema_up(&t->semaph);
     thread_exit();
   }
 
@@ -235,22 +276,22 @@ static void start_process(void* file_name_) {
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int process_wait(pid_t child_pid) {
-  struct thread* t = get_thread((tid_t)child_pid);
-  if (t == NULL)
+  struct thread_node* node = get_thread_node(child_pid);
+  if (node == NULL)
     return -1;
-  if (t->status == THREAD_DYING)
-    return -1;
-
-  if (t->already_wait)
+  if (node->already_wait)
     return -1;
 
-  t->already_wait = true;
-  pid_t pid = t->parent_tid;
+  node->already_wait = true;
+  pid_t pid = node->p_tid;
   tid_t cur_tid = thread_tid();
   if (pid != cur_tid)
     return -1;
-  sema_down(&t->semaph);
-  int ret = t->ret_status;
+  sema_down(&node->semaph);
+  int ret = node->ret_status;
+  lock_acquire(&thread_lock);
+  list_remove(&node->elem);
+  lock_release(&thread_lock);
   return ret;
 }
 
@@ -259,7 +300,9 @@ void process_exit(void) {
   struct thread* cur = thread_current();
   uint32_t* pd;
 
-  sema_up(&cur->semaph);
+  struct thread_node* node = get_thread_node(cur->tid);
+  if (node != NULL)
+    sema_up(&node->semaph);
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
@@ -269,7 +312,9 @@ void process_exit(void) {
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pcb->pagedir;
-  file_allow_write(cur->pcb->file);
+  lock_acquire(&file_lock);
+  file_close(cur->pcb->file);
+  lock_release(&file_lock);
   if (pd != NULL) {
     /* Correct ordering here is crucial.  We must set
          cur->pcb->pagedir to NULL before switching page directories,
@@ -395,7 +440,10 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   process_activate();
 
   /* Open executable file. */
+  lock_acquire(&file_lock);
   file = filesys_open(file_name);
+  lock_release(&file_lock);
+
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
@@ -470,11 +518,13 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
 
 done:
   /* We arrive here whether the load is successful or not. */
+  lock_acquire(&file_lock);
   if (success) {
     file_deny_write(file);
     t->pcb->file = file;
   } else
     file_close(file);
+  lock_release(&file_lock);
   return success;
 }
 
@@ -688,10 +738,9 @@ int get_file_fd(struct file* file) {
   struct file_list_elem* e = malloc(sizeof(struct file_list_elem));
   e->fd = pcb->next_fd++;
   e->file = file;
-  lock_init(&e->lock);
-  intr_disable();
+  lock_acquire(&pcb->file_list_lock);
   list_push_back(&pcb->all_files_list, &e->elem);
-  intr_enable();
+  lock_release(&pcb->file_list_lock);
   return e->fd;
 }
 
@@ -704,6 +753,7 @@ struct file* get_file(int fd) {
 
   struct list_elem* e;
   struct file* file = NULL;
+  lock_acquire(&pcb->file_list_lock);
   for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
        e = list_next(e)) {
     struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
@@ -712,28 +762,36 @@ struct file* get_file(int fd) {
       break;
     }
   }
+  lock_release(&pcb->file_list_lock);
   return file;
 }
 
 bool close_file(int fd) {
   struct process* pcb = thread_current()->pcb;
   if (pcb == NULL)
-    return -1;
+    return false;
 
   struct list_elem* e;
   bool ret = false;
-  intr_disable();
+  struct file* file = NULL;
+  lock_acquire(&pcb->file_list_lock);
   for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
        e = list_next(e)) {
     struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
     if (file_list_elem->fd == fd) {
-      file_close(file_list_elem->file);
+      file = file_list_elem->file;
       list_remove(e);
       ret = true;
       break;
     }
   }
-  intr_enable();
+  lock_release(&pcb->file_list_lock);
+
+  if (!ret)
+    return false;
+  lock_acquire(&file_lock);
+  file_close(file);
+  lock_release(&file_lock);
   return ret;
 }
 
@@ -741,22 +799,31 @@ int read_for_syscall(int fd, void* buffer, unsigned size) {
   struct process* pcb = thread_current()->pcb;
   if (pcb == NULL)
     return -1;
+  struct file* file = get_file(fd);
+  if (file == NULL)
+    return -1;
+  lock_acquire(&pcb->file_list_lock);
+  int ret = file_read(file, buffer, size);
+  lock_release(&pcb->file_list_lock);
+  return ret;
+}
 
-  struct list_elem* e;
-  struct file* file = NULL;
-  for (e = list_begin(&pcb->all_files_list); e != list_end(&pcb->all_files_list);
-       e = list_next(e)) {
-    struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
-    if (file_list_elem->fd == fd) {
-      file = file_list_elem->file;
-      if (file == NULL)
-        break;
-
-      lock_acquire(&file_list_elem->lock);
-      int n = file_read(file, buffer, size);
-      lock_release(&file_list_elem->lock);
-      return n;
-    }
+int open_for_syscall(const char* file) {
+  lock_acquire(&file_lock);
+  struct file* opened_file = filesys_open(file);
+  lock_release(&file_lock);
+  if (opened_file == NULL) {
+    return -1;
   }
-  return -1;
+  return get_file_fd(opened_file);
+}
+
+int write_for_syscall(int fd, const void* buffer, unsigned size) {
+  struct file* file = get_file(fd);
+  if (file == NULL)
+    return -1;
+  lock_acquire(&file_lock);
+  int write_size = file_write(file, buffer, size);
+  lock_release(&file_lock);
+  return write_size;
 }
