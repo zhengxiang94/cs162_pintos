@@ -6,16 +6,31 @@
 
 /* Pushes integer num to the FPU */
 static inline void fpu_push(int num) {
-  asm volatile("pushl %0; flds (%%esp); addl $4, %%esp" : : "m"(num));
+  unsigned char fpu[108];
+  asm("fsave %0;" : : "m"(fpu));
+  int status_word = fpu[4];
+  fpu[28 + status_word * 10] = (float)num;
+  if (status_word == 7)
+    status_word = 0;
+  else
+    ++status_word;
+  fpu[4] = status_word;
+  asm("frstor %0;" : : "m"(fpu));
 }
 
 /* Pops integer from the FPU */
 static inline int fpu_pop(void) {
   int val;
-  asm volatile("subl $4, %%esp; fstps (%%esp); mov (%%esp), %0; addl $4, %%esp"
-               : "=r"(val)
-               :
-               : "memory");
+  unsigned char fpu[108];
+  asm("fsave %0;" : : "m"(fpu));
+  int status_word = fpu[4];
+  if (status_word == 0)
+    status_word = 7;
+  else
+    status_word--;
+  val = fpu[28 + status_word * 10];
+  fpu[4] = status_word;
+  asm("frstor %0;" : : "m"(fpu));
   return val;
 }
 

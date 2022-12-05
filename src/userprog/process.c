@@ -49,7 +49,7 @@ struct thread_node* get_thread_node(tid_t tid) {
   for (struct list_elem* e = list_begin(&thread_nodes_list); e != list_end(&thread_nodes_list);
        e = list_next(e)) {
     struct thread_node* node = list_entry(e, struct thread_node, elem);
-    if (node->tid == tid){
+    if (node->tid == tid) {
       lock_release(&thread_lock);
       return node;
     }
@@ -256,6 +256,7 @@ static void start_process(void* file_name_) {
     thread_exit();
   }
 
+  asm("fsave (%0)" : : "g"(&if_.fp_regs)); // fill in the frame with current FP registers
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its

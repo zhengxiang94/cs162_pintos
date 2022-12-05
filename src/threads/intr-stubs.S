@@ -1,4 +1,5 @@
 #include "threads/loader.h"
+#include "threads/switch.h"
 
         .text
 
@@ -18,6 +19,8 @@
 .func intr_entry
 intr_entry:
 	/* Save caller's registers. */
+   subl $FPU_SIZE, %esp
+   fsave (%esp)
 	pushl %ds
 	pushl %es
 	pushl %fs
@@ -55,6 +58,9 @@ intr_exit:
 	popl %fs
 	popl %es
 	popl %ds
+   
+   frstor (%esp)
+   addl $FPU_SIZE, %esp
 
         /* Discard `struct intr_frame' vec_no, error_code,
            frame_pointer members. */

@@ -93,7 +93,7 @@ static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsi
     return;
   if (fd == 1) {
     putbuf((const char*)buffer, size);
-    f->eax = size; 
+    f->eax = size;
     return;
   }
   f->eax = write_for_syscall(fd, buffer, size);
@@ -150,7 +150,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_FILESIZE:
     case SYS_TELL:
     case SYS_CLOSE:
-    case SYS_PRACTICE: {
+    case SYS_PRACTICE:
+    case SYS_COMPUTE_E: {
       if (!is_validity(f, args + 0x08))
         return;
     } break;
@@ -208,6 +209,9 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_PRACTICE:
       f->eax = (int)args[1] + 1;
+      break;
+    case SYS_COMPUTE_E:
+      f->eax = sys_sum_to_e((int)args[1]);
       break;
     default:
       break;

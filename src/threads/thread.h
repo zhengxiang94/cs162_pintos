@@ -7,8 +7,6 @@
 #include "threads/synch.h"
 #include "threads/fixed-point.h"
 
-#define USERPROG
-
 /* States in a thread's life cycle. */
 enum thread_status {
   THREAD_RUNNING, /* Running thread. */
