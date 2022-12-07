@@ -24,7 +24,7 @@ static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
     return;
   pid_t pid = process_execute(cmd_line);
   if (pid == TID_ERROR) {
-    syscall_exit(f, -1);
+    f->eax = TID_ERROR;
     return;
   }
 
