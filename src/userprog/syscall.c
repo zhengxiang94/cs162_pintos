@@ -23,18 +23,7 @@ static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
   if (!is_validity(f, cmd_line) || !is_validity(f, cmd_line + 0x04))
     return;
   pid_t pid = process_execute(cmd_line);
-  if (pid == TID_ERROR) {
-    f->eax = TID_ERROR;
-    return;
-  }
-
-  struct thread* child_thread = get_thread(pid);
-  if (child_thread == NULL || !child_thread->load_success) {
-    f->eax = TID_ERROR;
-    return;
-  }
   f->eax = pid;
-  //printf("pid %d\n", pid);
 }
 
 static void syscall_wait(struct intr_frame* f, pid_t pid) {

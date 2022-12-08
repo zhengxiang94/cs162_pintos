@@ -34,6 +34,8 @@ struct thread_node {
   int ret_status; /* thread exit statuts */
   bool already_wait;
   struct semaphore semaph;
+  struct semaphore load_semaph;
+  bool load_success;
 };
 
 static struct list thread_nodes_list;
@@ -53,6 +55,23 @@ struct thread_node* get_thread_node(tid_t tid) {
       lock_release(&thread_lock);
       return node;
     }
+  }
+  lock_release(&thread_lock);
+  return NULL;
+}
+
+void remove_thread_node(tid_t p_tid) {
+  lock_acquire(&thread_lock);
+  struct list_elem* e = list_begin(&thread_nodes_list);
+  while (e != list_end(&thread_nodes_list)) {
+    struct thread_node* node = list_entry(e, struct thread_node, elem);
+    if (node->p_tid == p_tid) {
+      struct list_elem* temp = e;
+      e = list_next(e);
+      list_remove(temp);
+      free(node);
+    } else
+      e = list_next(e);
   }
   lock_release(&thread_lock);
   return NULL;
@@ -107,7 +126,9 @@ pid_t process_execute(const char* file_name) {
   thread_node->ret_status = -1;
   thread_node->already_wait = false;
   thread_node->p_tid = thread_tid();
+  thread_node->load_success = false;
   sema_init(&thread_node->semaph, 0);
+  sema_init(&thread_node->load_semaph, 0);
   lock_acquire(&thread_lock);
   list_push_back(&thread_nodes_list, &thread_node->elem);
   lock_release(&thread_lock);
@@ -116,10 +137,10 @@ pid_t process_execute(const char* file_name) {
   thread_node->tid = tid = thread_create(file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
-  struct thread* child_thread = get_thread(tid);
-  if (child_thread != NULL) {
-    sema_down(&child_thread->load_semaph);
-  }
+
+  sema_down(&thread_node->load_semaph);
+  if (!thread_node->load_success)
+    return TID_ERROR;
   return tid;
 }
 
@@ -224,16 +245,16 @@ static void start_process(void* file_name_) {
     strlcpy(t->pcb->process_name, argv0_name, strlen(argv0_name) + 1);
   }
 
+  struct thread_node* node = get_thread_node(t->tid);
   /* Initialize interrupt frame and load executable. */
   if (success) {
     memset(&if_, 0, sizeof if_);
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
-    t->load_success = success = load(argv0_name, &if_.eip, &if_.esp);
+    node->load_success = success = load(argv0_name, &if_.eip, &if_.esp);
   }
-
-  sema_up(&t->load_semaph);
+  sema_up(&node->load_semaph);
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
   if (!success && pcb_success) {
@@ -309,6 +330,15 @@ void process_exit(void) {
     thread_exit();
     NOT_REACHED();
   }
+
+  while (!list_empty(&cur->pcb->all_files_list)) {
+    struct list_elem* e = list_pop_back(&cur->pcb->all_files_list);
+    struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
+    free(file_list_elem->file);
+    free(file_list_elem);
+  }
+
+  remove_thread_node(cur->tid);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

@@ -206,7 +206,6 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  sema_init(&t->load_semaph, 0);
   /* Add to run queue. */
   thread_unblock(t);
 
@@ -282,19 +281,20 @@ struct thread* thread_current(void) {
 }
 
 struct thread* get_thread(tid_t tid) {
+  struct thread* ret = NULL;
   struct list_elem* e;
-  intr_disable();
+  enum intr_level old_level = intr_disable();
   ASSERT(intr_get_level() == INTR_OFF);
 
   for (e = list_begin(&all_list); e != list_end(&all_list); e = list_next(e)) {
     struct thread* t = list_entry(e, struct thread, allelem);
     if (t->tid == tid) {
-      intr_enable();
-      return t;
+      ret = t;
+      break;
     }
   }
-  intr_enable();
-  return NULL;
+  intr_set_level(old_level);
+  return ret;
 }
 
 /* Returns the running thread's tid. */
