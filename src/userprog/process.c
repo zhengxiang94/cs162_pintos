@@ -46,7 +46,7 @@ static thread_func start_pthread NO_RETURN;
 static bool load(const char* file_name, void (**eip)(void), void** esp);
 bool setup_thread(void (**eip)(void), void** esp);
 
-struct thread_node* get_thread_node(tid_t tid) {
+static struct thread_node* get_thread_node(tid_t tid) {
   lock_acquire(&thread_lock);
   for (struct list_elem* e = list_begin(&thread_nodes_list); e != list_end(&thread_nodes_list);
        e = list_next(e)) {
@@ -60,7 +60,7 @@ struct thread_node* get_thread_node(tid_t tid) {
   return NULL;
 }
 
-void remove_thread_node(tid_t p_tid) {
+static void remove_thread_node(tid_t p_tid) {
   lock_acquire(&thread_lock);
   struct list_elem* e = list_begin(&thread_nodes_list);
   while (e != list_end(&thread_nodes_list)) {
@@ -74,7 +74,6 @@ void remove_thread_node(tid_t p_tid) {
       e = list_next(e);
   }
   lock_release(&thread_lock);
-  return NULL;
 }
 
 void set_ret_status(struct thread* t, int status) {
@@ -166,13 +165,14 @@ static void args_push(const char* file_name, void** if_esp) {
 
   const int max_argv_size = 100;
   char** argv = malloc(sizeof(char*) * max_argv_size);
-  char* rest = malloc(strlen(file_name) + 1);
-  strlcpy(rest, file_name, strlen(file_name) + 1);
+  unsigned int size = strlen(file_name) + 1;
+  char* rest = malloc(size);
+  strlcpy(rest, file_name, size);
 
   char* token = NULL;
   int args_size = 0;
   int argc = 0;
-  while (token = strtok_r(rest, " ", &rest)) {
+  while ((token = strtok_r(rest, " ", &rest))) {
     int size = strlen(token) + 1;
     esp -= size;
     argv[argc] = esp;
@@ -242,7 +242,7 @@ static void start_process(void* file_name_) {
 
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
-    strlcpy(t->pcb->process_name, argv0_name, strlen(argv0_name) + 1);
+    strlcpy(t->pcb->process_name, argv0_name, sizeof(t->pcb->process_name));
   }
 
   struct thread_node* node = get_thread_node(t->tid);
@@ -780,7 +780,7 @@ Returns -1 if fd does not correspond to an entry in the file descriptor table. *
 struct file* get_file(int fd) {
   struct process* pcb = thread_current()->pcb;
   if (pcb == NULL)
-    return -1;
+    return NULL;
 
   struct list_elem* e;
   struct file* file = NULL;

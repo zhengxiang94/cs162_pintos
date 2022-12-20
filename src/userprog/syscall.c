@@ -1,5 +1,10 @@
 #include "userprog/syscall.h"
+#include "devices/input.h"
+#include "devices/shutdown.h"
+#include "filesys/file.h"
+#include "pagedir.h"
 #include <stdio.h>
+#include <float.h>
 #include <syscall-nr.h>
 
 void syscall_exit(struct intr_frame* f, int status) {
@@ -10,7 +15,7 @@ void syscall_exit(struct intr_frame* f, int status) {
   process_exit();
 }
 
-static bool is_validity(struct intr_frame* f, const uint8_t* uaddr) {
+static bool is_validity(struct intr_frame* f, const char* uaddr) {
   if (!is_user_vaddr(uaddr) || (pagedir_get_page(thread_current()->pcb->pagedir, uaddr) == NULL)) {
     syscall_exit(f, -1);
     return false;
@@ -66,8 +71,8 @@ static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned si
   if (!is_validity(f, buffer))
     return;
   if (fd == 0) {
-    char** buffer_vector = (char**)buffer;
-    for (int i = 0; i < size; i++) {
+    char* buffer_vector = (char*)buffer;
+    for (unsigned i = 0; i < size; i++) {
       uint8_t inputc = input_getc();
       buffer_vector[i] = inputc;
     }
@@ -94,7 +99,7 @@ static void syscall_seek(struct intr_frame* f, int fd, unsigned position) {
     f->eax = -1;
     return;
   }
-  f->eax = file_seek(file, position);
+  file_seek(file, position);
 }
 
 static void syscall_tell(struct intr_frame* f, int fd) {
@@ -119,17 +124,17 @@ void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   uint32_t* args = ((uint32_t*)f->esp);
-  if (!is_validity(f, args) || !is_validity(f, args + 0x04))
+  if (!is_validity(f, (char*)args) || !is_validity(f, (char*)(args + 0x04)))
     return;
   int syscall_type = args[0];
   switch (syscall_type) {
     case SYS_READ:
     case SYS_WRITE:
-      if (!is_validity(f, args + 0x10))
+      if (!is_validity(f, (char*)(args + 0x10)))
         return;
     case SYS_CREATE:
     case SYS_SEEK:
-      if (!is_validity(f, args + 0x0c))
+      if (!is_validity(f, (char*)(args + 0x0c)))
         return;
     case SYS_EXIT:
     case SYS_EXEC:
@@ -141,7 +146,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_CLOSE:
     case SYS_PRACTICE:
     case SYS_COMPUTE_E: {
-      if (!is_validity(f, args + 0x08))
+      if (!is_validity(f, (char*)(args + 0x08)))
         return;
     } break;
     default:
@@ -164,28 +169,28 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       syscall_exit(f, args[1]);
       break;
     case SYS_EXEC:
-      syscall_exec(f, args[1]);
+      syscall_exec(f, (char*)args[1]);
       break;
     case SYS_WAIT:
       syscall_wait(f, args[1]);
       break;
     case SYS_CREATE:
-      syscall_create(f, args[1], args[2]);
+      syscall_create(f, (char*)args[1], args[2]);
       break;
     case SYS_REMOVE:
-      syscall_remove(f, args[1]);
+      syscall_remove(f, (char*)args[1]);
       break;
     case SYS_OPEN:
-      syscall_open(f, args[1]);
+      syscall_open(f, (char*)args[1]);
       break;
     case SYS_FILESIZE:
       syscall_file_size(f, args[1]);
       break;
     case SYS_READ:
-      syscall_read(f, args[1], args[2], args[3]);
+      syscall_read(f, args[1], (char*)args[2], args[3]);
       break;
     case SYS_WRITE:
-      syscall_write(f, args[1], args[2], args[3]);
+      syscall_write(f, args[1], (char*)args[2], args[3]);
       break;
     case SYS_SEEK:
       syscall_seek(f, args[1], args[2]);
