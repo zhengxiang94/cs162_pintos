@@ -283,3 +283,8 @@ cscope.po.out
 
 ### PintOS ###
 pintos/**/build
+src/.cache
+src/userprog/.cache/clangd
+src/userprog/compile_commands.json
+.gitignore
+src/compile_commands.json
