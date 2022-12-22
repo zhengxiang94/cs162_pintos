@@ -91,7 +91,9 @@ struct thread {
   struct list_elem allelem;  /* List element for all threads list. */
 
   /* Shared between thread.c and synch.c. */
-  struct list_elem elem; /* List element. */
+  struct list_elem elem;       /* List element. */
+  struct list_elem sleep_elem; /* List element for sleep threads list. */
+  int64_t sleep_end_tick;      /* The tick when the thread sleep ends */
 
 #ifdef USERPROG
   /* Owned by process.c. */

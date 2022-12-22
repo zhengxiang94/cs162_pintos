@@ -24,6 +24,8 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+static struct list sleep_threads;
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops(unsigned loops);
 static void busy_wait(int64_t loops);
@@ -33,6 +35,7 @@ static void real_time_delay(int64_t num, int32_t denom);
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void timer_init(void) {
+  list_init(&sleep_threads);
   pit_configure_channel(0, 2, TIMER_FREQ);
   intr_register_ext(0x20, timer_interrupt, "8254 Timer");
 }
@@ -77,10 +80,12 @@ int64_t timer_elapsed(int64_t then) { return timer_ticks() - then; }
    be turned on. */
 void timer_sleep(int64_t ticks) {
   int64_t start = timer_ticks();
-
-  ASSERT(intr_get_level() == INTR_ON);
-  while (timer_elapsed(start) < ticks)
-    thread_yield();
+  struct thread* cur = thread_current();
+  enum intr_level old_level = intr_disable();
+  cur->sleep_end_tick = start + ticks;
+  list_push_back(&sleep_threads, &cur->sleep_elem);
+  thread_block();
+  intr_set_level(old_level);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -128,6 +133,19 @@ void timer_print_stats(void) { printf("Timer: %" PRId64 " ticks\n", timer_ticks(
 /* Timer interrupt handler. */
 static void timer_interrupt(struct intr_frame* args UNUSED) {
   ticks++;
+
+  enum intr_level old_level = intr_disable();
+  struct list_elem* e = list_begin(&sleep_threads);
+  while (e != list_end(&sleep_threads)) {
+    struct thread* t = list_entry(e, struct thread, sleep_elem);
+    if (t->sleep_end_tick < ticks) {
+      t->sleep_end_tick = 0;
+      thread_unblock(t);
+      e = list_remove(e);
+    } else
+      e = list_next(e);
+  }
+  intr_set_level(old_level);
   thread_tick();
 }
 
