@@ -285,6 +285,7 @@ cscope.po.out
 pintos/**/build
 src/.cache
 src/userprog/.cache/clangd
+src/devices/.cache/clangd
 src/userprog/compile_commands.json
 .gitignore
 src/compile_commands.json
