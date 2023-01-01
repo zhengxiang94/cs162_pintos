@@ -130,10 +130,12 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
   switch (syscall_type) {
     case SYS_READ:
     case SYS_WRITE:
+    case SYS_PT_CREATE:
       if (!is_validity(f, (char*)(args + 0x10)))
         return;
     case SYS_CREATE:
     case SYS_SEEK:
+    case SYS_SEMA_INIT:
       if (!is_validity(f, (char*)(args + 0x0c)))
         return;
     case SYS_EXIT:
@@ -145,10 +147,18 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_TELL:
     case SYS_CLOSE:
     case SYS_PRACTICE:
-    case SYS_COMPUTE_E: {
+    case SYS_COMPUTE_E:
+    case SYS_PT_JOIN:
+    case SYS_LOCK_INIT:
+    case SYS_LOCK_ACQUIRE:
+    case SYS_LOCK_RELEASE:
+    case SYS_SEMA_DOWN:
+    case SYS_SEMA_UP:
+    case SYS_GET_TID: {
       if (!is_validity(f, (char*)(args + 0x08)))
         return;
     } break;
+    case SYS_PT_EXIT:
     default:
       break;
   }
@@ -206,6 +216,36 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_COMPUTE_E:
       f->eax = sys_sum_to_e((int)args[1]);
+      break;
+    case SYS_PT_CREATE:
+      f->eax = pthread_execute((stub_fun)args[1], (pthread_fun)args[2], (void*)args[3]);
+      break;
+    case SYS_PT_EXIT:
+      pthread_exit();
+      break;
+    case SYS_PT_JOIN:
+      f->eax = pthread_join((tid_t)args[1]);
+      break;
+    case SYS_LOCK_INIT:
+      f->eax = syscall_lock_init((char*)args[1]);
+      break;
+    case SYS_LOCK_ACQUIRE:
+      f->eax = syscall_lock_acquire((char*)args[1]);
+      break;
+    case SYS_LOCK_RELEASE:
+      f->eax = syscall_lock_release((char*)args[1]);
+      break;
+    case SYS_SEMA_INIT:
+      f->eax = syscall_sema_init((char*)args[1], (int)args[2]);
+      break;
+    case SYS_SEMA_DOWN:
+      f->eax = syscall_sema_down((char*)args[1]);
+      break;
+    case SYS_SEMA_UP:
+      f->eax = syscall_sema_up((char*)args[1]);
+      break;
+    case SYS_GET_TID:
+      f->eax = thread_current()->tid;
       break;
     default:
       break;
