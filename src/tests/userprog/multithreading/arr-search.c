@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include <syscall.h>
 
-#define ARR_SIZE (1 << 5)
+#define ARR_SIZE (1 << 2)
 
 // Global variables
 int arr[ARR_SIZE];

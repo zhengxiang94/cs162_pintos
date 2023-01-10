@@ -92,6 +92,7 @@ struct thread {
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem;       /* List element. */
+  struct list_elem p_elem;     /* List element for thread in pcb. */
   struct list_elem sleep_elem; /* List element for sleep threads list. */
   int64_t sleep_end_tick;      /* The tick when the thread sleep ends */
 
@@ -139,6 +140,7 @@ const char* thread_name(void);
 
 void thread_exit(void) NO_RETURN;
 void thread_yield(void);
+void thread_kill(struct thread*);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func(struct thread* t, void* aux);

@@ -31,7 +31,7 @@ struct file_list_elem {
 struct thread_node {
   struct list_elem elem;
   tid_t tid;      /* current thread tid */
-  tid_t p_tid;    /* parent thread tid */
+  tid_t p_pid;    /* parent thread tid */
   int ret_status; /* thread exit statuts */
   bool already_wait;
   struct semaphore semaph;
@@ -104,12 +104,12 @@ static struct thread_node* get_thread_node(tid_t tid) {
   return NULL;
 }
 
-static void remove_thread_node(tid_t p_tid) {
+static void remove_thread_node(tid_t p_pid) {
   lock_acquire(&thread_lock);
   struct list_elem* e = list_begin(&thread_nodes_list);
   while (e != list_end(&thread_nodes_list)) {
     struct thread_node* node = list_entry(e, struct thread_node, elem);
-    if (node->p_tid == p_tid) {
+    if (node->p_pid == p_pid) {
       struct list_elem* temp = e;
       e = list_next(e);
       list_remove(temp);
@@ -168,7 +168,10 @@ pid_t process_execute(const char* file_name) {
   struct thread_node* thread_node = malloc(sizeof(struct thread_node));
   thread_node->ret_status = -1;
   thread_node->already_wait = false;
-  thread_node->p_tid = thread_tid();
+  if (thread_current()->pcb == NULL || thread_current()->pcb->main_thread == NULL)
+    thread_node->p_pid = thread_current()->tid;
+  else
+    thread_node->p_pid = thread_current()->pcb->main_thread->tid;
   thread_node->load_success = false;
   sema_init(&thread_node->semaph, 0);
   sema_init(&thread_node->load_semaph, 0);
@@ -284,6 +287,9 @@ static void start_process(void* file_name_) {
     lock_init(&t->pcb->file_list_lock);
     t->pcb->next_fd = 2;
 
+    list_init(&t->pcb->all_threads);
+    sema_init(&t->pcb->semaph, 0);
+
     // Init lock&semaphore list
     list_init(&t->pcb->user_lock_list);
     t->pcb->next_lock_id = 1;
@@ -355,9 +361,13 @@ int process_wait(pid_t child_pid) {
     return -1;
 
   node->already_wait = true;
-  pid_t pid = node->p_tid;
-  tid_t cur_tid = thread_tid();
-  if (pid != cur_tid)
+  pid_t pid = node->p_pid;
+  tid_t cur_pid;
+  if (thread_current()->pcb == NULL || thread_current()->pcb->main_thread == NULL)
+    cur_pid = thread_current()->tid;
+  else
+    cur_pid = thread_current()->pcb->main_thread->tid;
+  if (pid != cur_pid)
     return -1;
   sema_down(&node->semaph);
   int ret = node->ret_status;
@@ -373,28 +383,59 @@ void process_exit(void) {
   uint32_t* pd;
 
   struct thread_node* node = get_thread_node(cur->tid);
-  if (node != NULL)
-    sema_up(&node->semaph);
+  struct process* pcb = cur->pcb;
+
   /* If this thread does not have a PCB, don't worry */
-  if (cur->pcb == NULL) {
+  if (pcb == NULL) {
+    if (node != NULL)
+      sema_up(&node->semaph);
     thread_exit();
     NOT_REACHED();
   }
-
-  while (!list_empty(&cur->pcb->all_files_list)) {
-    struct list_elem* e = list_pop_back(&cur->pcb->all_files_list);
+  lock_acquire(&file_lock);
+  lock_acquire(&pcb->file_list_lock);
+  while (!list_empty(&pcb->all_files_list)) {
+    struct list_elem* e = list_pop_back(&pcb->all_files_list);
     struct file_list_elem* file_list_elem = list_entry(e, struct file_list_elem, elem);
-    free(file_list_elem->file);
+    file_close(file_list_elem->file);
     free(file_list_elem);
   }
+  lock_release(&pcb->file_list_lock);
+  enum intr_level old_level = intr_disable();
+  // exit all children threads
 
-  remove_thread_node(cur->tid);
+  struct list* all_threads = &pcb->all_threads;
+  for (struct list_elem* e = list_begin(all_threads); e != list_end(all_threads);
+       e = list_next(e)) {
+    struct thread* t = list_entry(e, struct thread, p_elem);
+    struct thread_node* node = get_thread_node(t->tid);
+    if (node != NULL) {
+      sema_up(&node->semaph);
+    }
+    list_remove(&node->elem);
+  }
+
+  if (!is_main_thread(cur, pcb)) {
+    struct thread* main = cur->pcb->main_thread;
+    struct thread_node* main_node = get_thread_node(main->tid);
+    if (main_node != NULL)
+      sema_up(&main_node->semaph);
+    thread_kill(main);
+  }
+
+  while (!list_empty(all_threads)) {
+    struct list_elem* e = list_pop_front(all_threads);
+    struct thread* t = list_entry(e, struct thread, p_elem);
+    if (cur->tid == t->tid)
+      continue;
+    thread_kill(t);
+  }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pcb->pagedir;
-  lock_acquire(&file_lock);
   file_close(cur->pcb->file);
+  intr_set_level(old_level);
   lock_release(&file_lock);
   if (pd != NULL) {
     /* Correct ordering here is crucial.  We must set
@@ -416,7 +457,9 @@ void process_exit(void) {
   struct process* pcb_to_free = cur->pcb;
   cur->pcb = NULL;
   free(pcb_to_free);
-
+  if (node != NULL)
+    sema_up(&node->semaph);
+  remove_thread_node(cur->tid);
   thread_exit();
 }
 
@@ -763,24 +806,29 @@ pid_t get_pid(struct process* p) { return (pid_t)p->main_thread->tid; }
 bool setup_thread(void** esp) {
   uint8_t* kpage;
   bool success = false;
+  enum intr_level old_level = intr_disable();
+  struct thread* t = thread_current();
+  if (t->pcb != NULL && t->pcb->pagedir != NULL) {
+    kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+    if (kpage != NULL) {
+      void* base = PHYS_BASE;
+      int max_pthread_num = 1000000;
+      for (int i = 0; i < max_pthread_num; i++) {
+        base -= PGSIZE;
+        if (!pagedir_is_accessed(t->pcb->pagedir, (uint8_t*)base - PGSIZE)) {
+          //printf("mang i: %d\n", i);
+          break;
+        }
+      }
+      success = install_page(((uint8_t*)base) - PGSIZE, kpage, true);
 
-  kpage = palloc_get_page(PAL_USER | PAL_ZERO);
-  if (kpage != NULL) {
-    struct thread* t = thread_current();
-    void* base = PHYS_BASE;
-    int max_pthread_num = 100;
-    for (int i = 0; i < max_pthread_num; i++) {
-      base -= PGSIZE;
-      if (pagedir_get_page(t->pcb->pagedir, (uint8_t*)base - PGSIZE) == NULL)
-        break;
+      if (success)
+        *esp = base;
+      else
+        palloc_free_page(kpage);
     }
-    success = install_page(((uint8_t*)base) - PGSIZE, kpage, true);
-
-    if (success)
-      *esp = base;
-    else
-      palloc_free_page(kpage);
   }
+  intr_set_level(old_level);
   return success;
 }
 
@@ -807,7 +855,7 @@ tid_t pthread_execute(stub_fun sf, pthread_fun tf, void* arg) {
   struct thread_node* thread_node = malloc(sizeof(struct thread_node));
   thread_node->ret_status = -1;
   thread_node->already_wait = false;
-  thread_node->p_tid = thread_tid();
+  thread_node->p_pid = thread_current()->pcb->main_thread->tid;
   thread_node->load_success = false;
   sema_init(&thread_node->semaph, 0);
   sema_init(&thread_node->load_semaph, 0);
@@ -859,23 +907,7 @@ static void start_pthread(void* exec_) {
   node->load_success = setup_thread(&if_.esp);
   sema_up(&node->load_semaph);
   if (node->load_success) {
-    // // stack align
-    // int align_size = 8;
-    // if_.esp -= align_size;
-    // memset(if_.esp, 0, align_size);
-
-    // // push arg to esp
-    // if_.esp -= 4;
-    // *(void**)if_.esp = start_pthread_args->arg;
-
-    // // push pthread_fun to esp
-    // if_.esp -= 4;
-    // *(void**)if_.esp = start_pthread_args->tf;
-
-    // // return value
-    // if_.esp -= 4;
-    // memset(if_.esp, 0, 4);
-
+    list_push_back(&t->pcb->all_threads, &t->p_elem);
     int align_size = 0x08;
     if_.esp -= align_size;
     memset(if_.esp, 0, align_size);
@@ -888,7 +920,7 @@ static void start_pthread(void* exec_) {
     if_.esp -= 0x04;
     memset(if_.esp, 0, 4);
   } else {
-    thread_exit();
+    pthread_exit();
   }
 
   asm("fsave (%0)" : : "g"(&if_.fp_regs)); // fill in the frame with current FP registers
@@ -910,8 +942,14 @@ static void start_pthread(void* exec_) {
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
 tid_t pthread_join(tid_t tid) {
+  if (tid == thread_current()->pcb->main_thread->tid) {
+    sema_down(&thread_current()->pcb->semaph);
+    return tid;
+  }
   struct thread_node* node = get_thread_node(tid);
-  if (node->p_tid != thread_current()->pcb->main_thread->tid)
+  if (node == NULL)
+    return TID_ERROR;
+  if (node->p_pid != thread_current()->pcb->main_thread->tid)
     return TID_ERROR;
   if (node->already_wait)
     return TID_ERROR;
@@ -930,9 +968,15 @@ tid_t pthread_join(tid_t tid) {
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
 void pthread_exit(void) {
-  struct thread_node* node = get_thread_node(thread_current()->tid);
+  struct thread* t = thread_current();
+  if (is_main_thread(t, t->pcb)) {
+    pthread_exit_main();
+    return;
+  }
+  struct thread_node* node = get_thread_node(t->tid);
   if (node != NULL)
     sema_up(&node->semaph);
+  list_remove(&t->p_elem);
   thread_exit();
 }
 
@@ -944,7 +988,26 @@ void pthread_exit(void) {
 
    This function will be implemented in Project 2: Multithreading. For
    now, it does nothing. */
-void pthread_exit_main(void) {}
+void pthread_exit_main(void) {
+  struct process* p = thread_current()->pcb;
+  sema_up(&p->semaph);
+  while (true) {
+    if (list_empty(&p->all_threads))
+      break;
+    struct list_elem* e = list_pop_front(&p->all_threads);
+    if (e == NULL)
+      break;
+    struct thread* t = list_entry(e, struct thread, p_elem);
+    pthread_join(t->tid);
+  }
+
+  struct thread_node* node = get_thread_node(thread_current()->tid);
+  if (node != NULL) {
+    sema_up(&node->semaph);
+    printf("%s: exit(%d)\n", thread_current()->pcb->process_name, 0);
+  }
+  thread_exit();
+}
 
 /* Insert into the files list and return fd*/
 int get_file_fd(struct file* file) {

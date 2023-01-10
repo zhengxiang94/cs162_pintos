@@ -331,6 +331,22 @@ void thread_yield(void) {
   intr_set_level(old_level);
 }
 
+void thread_kill(struct thread* t) {
+  enum intr_level old_level;
+
+  ASSERT(!intr_context());
+  ASSERT(t != NULL);
+  ASSERT(t != initial_thread);
+
+  old_level = intr_disable();
+  list_remove(&t->allelem);
+  list_remove(&t->elem);
+  t->status = THREAD_DYING;
+  palloc_free_page(t);
+
+  intr_set_level(old_level);
+}
+
 /* Invoke function 'func' on all threads, passing along 'aux'.
    This function must be called with interrupts off. */
 void thread_foreach(thread_action_func* func, void* aux) {

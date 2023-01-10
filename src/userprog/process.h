@@ -32,6 +32,8 @@ struct process {
   int next_fd;                     /* The fd of the next time the file is opened */
   struct list all_files_list;      /* files list */
   struct lock file_list_lock;      /* files list lock */
+  struct list all_threads;         /* all threads in pcb */
+  struct semaphore semaph;         /* for pthread_exit_main */
   struct list user_lock_list;      /* user lock list */
   int next_lock_id;                /* next_lock_id for  user lock list */
   struct list user_semaphore_list; /* user semaphore list */
