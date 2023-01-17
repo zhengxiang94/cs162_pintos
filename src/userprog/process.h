@@ -25,13 +25,19 @@ typedef void (*stub_fun)(pthread_fun, void*);
    of the process, which is `special`. */
 struct process {
   /* Owned by process.c. */
-  uint32_t* pagedir;          /* Page directory. */
-  char process_name[16];      /* Name of the main thread */
-  struct thread* main_thread; /* Pointer to main thread */
-  struct file* file;          /* Load process file */
-  int next_fd;                /* The fd of the next time the file is opened */
-  struct list all_files_list; /* files list */
-  struct lock file_list_lock; /* files list lock */
+  uint32_t* pagedir;               /* Page directory. */
+  char process_name[16];           /* Name of the main thread */
+  struct thread* main_thread;      /* Pointer to main thread */
+  struct file* file;               /* Load process file */
+  int next_fd;                     /* The fd of the next time the file is opened */
+  struct list all_files_list;      /* files list */
+  struct lock file_list_lock;      /* files list lock */
+  struct list all_threads;         /* all threads in pcb */
+  struct semaphore semaph;         /* for pthread_exit_main */
+  struct list user_lock_list;      /* user lock list */
+  int next_lock_id;                /* next_lock_id for  user lock list */
+  struct list user_semaphore_list; /* user semaphore list */
+  int next_semaphore_id;           /* next_semaphore_id for user semaphore list */
 };
 
 void userprog_init(void);
@@ -48,6 +54,13 @@ tid_t pthread_execute(stub_fun, pthread_fun, void*);
 tid_t pthread_join(tid_t);
 void pthread_exit(void);
 void pthread_exit_main(void);
+
+bool syscall_lock_init(char* lock);
+bool syscall_lock_acquire(char* lock);
+bool syscall_lock_release(char* lock);
+bool syscall_sema_init(char* sema, int val);
+bool syscall_sema_down(char* sema);
+bool syscall_sema_up(char* sema);
 
 int get_file_fd(struct file* file);
 struct file* get_file(int fd);

@@ -83,17 +83,22 @@ typedef int tid_t;
    blocked state is on a semaphore wait list. */
 struct thread {
   /* Owned by thread.c. */
-  tid_t tid;                 /* Thread identifier. */
-  enum thread_status status; /* Thread state. */
-  char name[16];             /* Name (for debugging purposes). */
-  uint8_t* stack;            /* Saved stack pointer. */
-  int priority;              /* Priority. */
-  struct list_elem allelem;  /* List element for all threads list. */
+  tid_t tid;                  /* Thread identifier. */
+  enum thread_status status;  /* Thread state. */
+  char name[16];              /* Name (for debugging purposes). */
+  uint8_t* stack;             /* Saved stack pointer. */
+  int priority;               /* Priority. */
+  int ori_priority;           /* Original priority. */
+  struct list donations;      /* Donations given to thread */
+  struct lock* blocking_lock; /* Reference to a lock the thread blocked by */
+  struct list_elem allelem;   /* List element for all threads list. */
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem;       /* List element. */
+  struct list_elem p_elem;     /* List element for thread in pcb. */
   struct list_elem sleep_elem; /* List element for sleep threads list. */
   int64_t sleep_end_tick;      /* The tick when the thread sleep ends */
+  void* upage;
 
 #ifdef USERPROG
   /* Owned by process.c. */
@@ -102,6 +107,13 @@ struct thread {
 
   /* Owned by thread.c. */
   unsigned magic; /* Detects stack overflow. */
+};
+
+struct thread_donation {
+  struct list_elem elem;
+  struct lock* lock;
+  struct thread* donor;
+  int priority;
 };
 
 /* Types of scheduler that the user can request the kernel
@@ -139,6 +151,8 @@ const char* thread_name(void);
 
 void thread_exit(void) NO_RETURN;
 void thread_yield(void);
+void thread_kill(struct thread*);
+struct thread* pop_highest_priority_thread(struct list*);
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func(struct thread* t, void* aux);

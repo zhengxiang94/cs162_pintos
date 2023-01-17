@@ -138,7 +138,7 @@ static void timer_interrupt(struct intr_frame* args UNUSED) {
   struct list_elem* e = list_begin(&sleep_threads);
   while (e != list_end(&sleep_threads)) {
     struct thread* t = list_entry(e, struct thread, sleep_elem);
-    if (t->sleep_end_tick < ticks) {
+    if (t->sleep_end_tick <= ticks) {
       t->sleep_end_tick = 0;
       thread_unblock(t);
       e = list_remove(e);
