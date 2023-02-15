@@ -129,6 +129,7 @@ void thread_init(void) {
   init_thread(initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid();
+  initial_thread->cwd = ROOT_DIR_SECTOR;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -508,6 +509,7 @@ static void init_thread(struct thread* t, const char* name, int priority) {
   t->priority = priority;
   t->ori_priority = priority;
   t->pcb = NULL;
+  t->cwd = ROOT_DIR_SECTOR;
   t->magic = THREAD_MAGIC;
   list_init(&t->donations);
 

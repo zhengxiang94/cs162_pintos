@@ -283,22 +283,22 @@ static void start_process(void* file_name_) {
     t->pcb = new_pcb;
 
     // Init files list
-    list_init(&t->pcb->all_files_list);
-    lock_init(&t->pcb->file_list_lock);
-    t->pcb->next_fd = 2;
+    list_init(&new_pcb->all_files_list);
+    lock_init(&new_pcb->file_list_lock);
+    new_pcb->next_fd = 2;
 
-    list_init(&t->pcb->all_threads);
-    sema_init(&t->pcb->semaph, 0);
+    list_init(&new_pcb->all_threads);
+    sema_init(&new_pcb->semaph, 0);
 
     // Init lock&semaphore list
-    list_init(&t->pcb->user_lock_list);
-    t->pcb->next_lock_id = 1;
-    list_init(&t->pcb->user_semaphore_list);
-    t->pcb->next_semaphore_id = 1;
+    list_init(&new_pcb->user_lock_list);
+    new_pcb->next_lock_id = 1;
+    list_init(&new_pcb->user_semaphore_list);
+    new_pcb->next_semaphore_id = 1;
 
     // Continue initializing the PCB as normal
-    t->pcb->main_thread = t;
-    strlcpy(t->pcb->process_name, argv0_name, sizeof(t->pcb->process_name));
+    new_pcb->main_thread = t;
+    strlcpy(new_pcb->process_name, argv0_name, sizeof(new_pcb->process_name));
   }
 
   struct thread_node* node = get_thread_node(t->tid);

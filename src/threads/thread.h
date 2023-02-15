@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "devices/block.h"
 #include "threads/synch.h"
 #include "threads/fixed-point.h"
 
@@ -99,6 +100,7 @@ struct thread {
   struct list_elem sleep_elem; /* List element for sleep threads list. */
   int64_t sleep_end_tick;      /* The tick when the thread sleep ends */
   void* upage;
+  block_sector_t cwd; /* The current working directory. */
 
 #ifdef USERPROG
   /* Owned by process.c. */

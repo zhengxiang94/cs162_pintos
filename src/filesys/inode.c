@@ -13,10 +13,13 @@
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk {
-  block_sector_t start; /* First data sector. */
-  off_t length;         /* File size in bytes. */
-  unsigned magic;       /* Magic number. */
-  uint32_t unused[125]; /* Not used. */
+  block_sector_t parent_dir; /* inode_disk sector of the parent directory. */
+  bool is_dir;               /* True if this file is a directory. */
+  int file_number;           /* The number of files */
+  block_sector_t start;      /* First data sector. */
+  off_t length;              /* File size in bytes. */
+  unsigned magic;            /* Magic number. */
+  uint32_t unused[122];      /* Not used. */
 };
 
 /* Returns the number of sectors to allocate for an inode SIZE
@@ -58,6 +61,11 @@ void inode_init(void) { list_init(&open_inodes); }
    Returns true if successful.
    Returns false if memory or disk allocation fails. */
 bool inode_create(block_sector_t sector, off_t length) {
+  return inode_create_with_dir_info(sector, length, ROOT_DIR_SECTOR, false);
+}
+
+bool inode_create_with_dir_info(block_sector_t sector, off_t length, block_sector_t parent_dir,
+                                bool is_dir) {
   struct inode_disk* disk_inode = NULL;
   bool success = false;
 
@@ -70,6 +78,9 @@ bool inode_create(block_sector_t sector, off_t length) {
   disk_inode = calloc(1, sizeof *disk_inode);
   if (disk_inode != NULL) {
     size_t sectors = bytes_to_sectors(length);
+    disk_inode->parent_dir = parent_dir;
+    disk_inode->is_dir = is_dir;
+    disk_inode->file_number = 0;
     disk_inode->length = length;
     disk_inode->magic = INODE_MAGIC;
     if (free_map_allocate(sectors, &disk_inode->start)) {
@@ -157,6 +168,11 @@ void inode_close(struct inode* inode) {
 void inode_remove(struct inode* inode) {
   ASSERT(inode != NULL);
   inode->removed = true;
+}
+
+bool inode_is_remove(const struct inode* inode) {
+  ASSERT(inode != NULL);
+  return inode->removed;
 }
 
 /* Reads SIZE bytes from INODE into BUFFER, starting at position OFFSET.
@@ -285,3 +301,20 @@ void inode_allow_write(struct inode* inode) {
 
 /* Returns the length, in bytes, of INODE's data. */
 off_t inode_length(const struct inode* inode) { return inode->data.length; }
+
+bool inode_is_dir(const struct inode* inode) { return inode != NULL && inode->data.is_dir; }
+
+bool inode_set_parent_sector(block_sector_t sector, block_sector_t parent_sector) {
+  struct inode* inode = inode_open(sector);
+  if (inode == NULL)
+    return false;
+  inode->data.parent_dir = parent_sector;
+  inode_close(inode);
+  return true;
+}
+
+block_sector_t inode_get_parent_dir(const struct inode* inode) { return inode->data.parent_dir; }
+
+void inode_file_number_plus_one(struct inode* inode) { inode->data.file_number++; }
+void inode_file_number_sub_one(struct inode* inode) { inode->data.file_number--; }
+bool inode_file_number_empty(struct inode* inode) { return inode->data.file_number == 0; }

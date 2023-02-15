@@ -2,7 +2,11 @@
 #include "devices/input.h"
 #include "devices/shutdown.h"
 #include "filesys/file.h"
+#include "filesys/filesys.h"
+#include "filesys/inode.h"
 #include "pagedir.h"
+#include "stddef.h"
+#include "threads/thread.h"
 #include <stdio.h>
 #include <float.h>
 #include <syscall-nr.h>
@@ -118,6 +122,39 @@ static void syscall_close(struct intr_frame* f, int fd) {
   }
 }
 
+static bool syscall_chdir(const char* dir) {
+  block_sector_t new_cwd = filesys_chdir(dir);
+  if (new_cwd == 0)
+    return false;
+  thread_current()->cwd = new_cwd;
+  return true;
+}
+
+static bool syscall_mkdir(const char* dir) { return filesys_mkdir(dir); }
+
+static bool syscall_readdir(int fd, char* name) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
+    return false;
+  }
+  return filesys_readdir(file, name);
+}
+
+static bool syscall_isdir(int fd) {
+  struct file* file = get_file(fd);
+  if (file == NULL) {
+    return false;
+  }
+  return filesys_isdir(file);
+}
+
+static int syscall_inumber(int fd) {
+  struct file* file = get_file(fd);
+  if (file == NULL)
+    return -1;
+  return get_inumber(file);
+}
+
 static void syscall_handler(struct intr_frame*);
 
 void syscall_init(void) { intr_register_int(0x30, 3, INTR_ON, syscall_handler, "syscall"); }
@@ -136,6 +173,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_CREATE:
     case SYS_SEEK:
     case SYS_SEMA_INIT:
+    case SYS_READDIR:
       if (!is_validity(f, (char*)(args + 0x0c)))
         return;
     case SYS_EXIT:
@@ -154,7 +192,11 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
     case SYS_LOCK_RELEASE:
     case SYS_SEMA_DOWN:
     case SYS_SEMA_UP:
-    case SYS_GET_TID: {
+    case SYS_GET_TID:
+    case SYS_CHDIR:
+    case SYS_MKDIR:
+    case SYS_ISDIR:
+    case SYS_INUMBER: {
       if (!is_validity(f, (char*)(args + 0x08)))
         return;
     } break;
@@ -246,6 +288,21 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       break;
     case SYS_GET_TID:
       f->eax = thread_current()->tid;
+      break;
+    case SYS_CHDIR:
+      f->eax = syscall_chdir((char*)args[1]);
+      break;
+    case SYS_MKDIR:
+      f->eax = syscall_mkdir((char*)args[1]);
+      break;
+    case SYS_READDIR:
+      f->eax = syscall_readdir((int)args[1], (char*)args[2]);
+      break;
+    case SYS_ISDIR:
+      f->eax = syscall_isdir((int)args[1]);
+      break;
+    case SYS_INUMBER:
+      f->eax = syscall_inumber((int)args[1]);
       break;
     default:
       break;
