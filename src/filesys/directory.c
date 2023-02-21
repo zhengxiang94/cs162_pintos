@@ -43,6 +43,13 @@ struct dir* dir_open(struct inode* inode) {
   }
 }
 
+struct dir* dir_open_pos(struct inode* inode, off_t pos) {
+  struct dir* dir = dir_open(inode);
+  if (dir != NULL)
+    dir->pos = pos;
+  return dir;
+}
+
 struct dir* dir_parent_open(struct inode* inode) {
   block_sector_t parent_dir = inode_get_parent_dir(inode);
   return dir_open(inode_open(parent_dir));
@@ -88,6 +95,8 @@ struct inode* get_root_dir_inode(void) {
   inode_close(inode);
   return inode;
 }
+
+off_t dir_tell(struct dir* dir) { return dir->pos; }
 
 /* Searches DIR for a file with the given NAME.
    If successful, returns true, sets *EP to the directory entry
@@ -186,8 +195,6 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
   strlcpy(e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
   success = inode_write_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
-  inode_file_number_plus_one(dir->inode);
-  inode_set_parent_sector(inode_sector, inode_get_inumber(dir->inode));
 
 done:
   return success;
@@ -221,7 +228,6 @@ bool dir_remove(struct dir* dir, const char* name) {
 
   /* Remove inode. */
   inode_remove(inode);
-  inode_file_number_sub_one(dir->inode);
   success = true;
 
 done:
@@ -256,7 +262,6 @@ bool dir_remove_by_sector(struct dir* dir, const block_sector_t sector) {
 
   /* Remove inode. */
   inode_remove(inode);
-  inode_file_number_sub_one(dir->inode);
   success = true;
 
 done:
@@ -284,9 +289,18 @@ bool dir_is_valid(struct dir* dir) {
   return dir != NULL && dir->inode != NULL && !inode_is_remove(dir->inode);
 }
 
-bool dir_is_empty(struct dir* dir) {
+bool dir_is_empty(struct inode* inode) {
   struct dir_entry e;
-  return inode_read_at(dir->inode, &e, sizeof e, dir->pos) == 0;
+  size_t ofs;
+  ASSERT(inode != NULL);
+
+  for (ofs = 0; inode_read_at(inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e)
+    if (e.in_use) {
+      return false;
+    }
+  return true;
 }
+
+void dir_free(struct dir* dir) { free(dir); }
 
 block_sector_t get_dir_inumber(const struct dir* dir) { return inode_get_inumber(dir->inode); }

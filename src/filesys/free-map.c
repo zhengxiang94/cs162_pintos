@@ -15,6 +15,7 @@ void free_map_init(void) {
     PANIC("bitmap creation failed--file system device is too large");
   bitmap_mark(free_map, FREE_MAP_SECTOR);
   bitmap_mark(free_map, ROOT_DIR_SECTOR);
+  lock_init(&free_map_lock);
 }
 
 /* Allocates CNT consecutive sectors from the free map and stores
@@ -65,4 +66,10 @@ void free_map_create(void) {
     PANIC("can't open free map");
   if (!bitmap_write(free_map, free_map_file))
     PANIC("can't write free map");
+}
+
+/* Returns the number of sectors available for use. */
+size_t free_map_available_space(void) {
+  size_t space = bitmap_count(free_map, 0, block_size(fs_device), false);
+  return space;
 }

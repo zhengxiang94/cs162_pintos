@@ -79,6 +79,13 @@ bool filesys_create(const char* name, off_t initial_size) {
 struct file* filesys_open(const char* name) {
   if (*name == '\0')
     return NULL;
+  if (!strcmp(name, ".")) {
+    struct inode* inode = inode_open(thread_current()->cwd);
+    if (inode == NULL || inode_is_remove(inode))
+      return NULL;
+    return file_open(inode);
+  }
+
   struct dir* dir = dir_open_cwd(name);
   struct inode* inode = NULL;
   const char** name_cp = &name;
@@ -105,18 +112,20 @@ struct file* filesys_open(const char* name) {
    or if an internal memory allocation fails. */
 bool filesys_remove(const char* name) {
   struct file* file = filesys_open(name);
+  if (file == NULL)
+    return false;
   struct inode* inode = file_get_inode(file);
   if (inode == NULL)
     return false;
   if (inode_is_dir(inode)) {
-    if (!inode_file_number_empty(inode))
+    if (!dir_is_empty(inode))
       return false;
   }
 
   struct dir* dir = dir_parent_open(inode);
   bool success = dir != NULL && dir_remove_by_sector(dir, inode_get_inumber(inode));
   dir_close(dir);
-
+  file_close(file);
   return success;
 }
 
@@ -132,10 +141,11 @@ bool filesys_mkdir(const char* dir_name) {
     if (**name_cp == '\0') {
       block_sector_t inode_sector = 0;
       bool success = free_map_allocate(1, &inode_sector) &&
-                     dir_create(inode_sector, 512, get_dir_inumber(dir)) &&
+                     dir_create(inode_sector, 16, get_dir_inumber(dir)) &&
                      dir_add(dir, part, inode_sector);
       if (!success && inode_sector != 0)
         free_map_release(inode_sector, 1);
+      dir_close(dir);
       return success;
     }
 
@@ -153,6 +163,8 @@ bool filesys_mkdir(const char* dir_name) {
 block_sector_t filesys_chdir(const char* path_name) {
   if (path_name == NULL || ('\0' == path_name[0]))
     return 0;
+  if (!strcmp(path_name, ".."))
+    return inode_get_parent_dir(inode_open(thread_current()->cwd));
   const char** name_cp = &path_name;
   struct dir* dir = dir_open_cwd(path_name);
   while (true) {
@@ -187,10 +199,13 @@ bool filesys_readdir(struct file* file, char* name) {
   bool success = false;
   if (inode == NULL || !inode_is_dir(inode))
     return success;
-  struct dir* dir = dir_open(inode);
-  if (dir != NULL)
+  struct dir* dir = dir_open_pos(inode, file_tell(file));
+  if (dir != NULL) {
     success = dir_readdir(dir, name);
-  dir_close(dir);
+    if (success)
+      file_seek(file, dir_tell(dir));
+  }
+  dir_free(dir);
   return success;
 }
 
@@ -198,7 +213,7 @@ bool filesys_readdir(struct file* file, char* name) {
 static void do_format(void) {
   printf("Formatting file system...");
   free_map_create();
-  if (!dir_create(ROOT_DIR_SECTOR, 512, ROOT_DIR_SECTOR))
+  if (!dir_create(ROOT_DIR_SECTOR, 16, ROOT_DIR_SECTOR))
     PANIC("root directory creation failed");
   free_map_close();
   printf("done.\n");

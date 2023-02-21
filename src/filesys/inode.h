@@ -21,11 +21,7 @@ void inode_deny_write(struct inode*);
 void inode_allow_write(struct inode*);
 off_t inode_length(const struct inode*);
 bool inode_is_dir(const struct inode*);
-bool inode_set_parent_sector(block_sector_t, block_sector_t);
 bool inode_is_remove(const struct inode*);
 block_sector_t inode_get_parent_dir(const struct inode*);
-void inode_file_number_plus_one(struct inode*);
-void inode_file_number_sub_one(struct inode*);
-bool inode_file_number_empty(struct inode*);
 
 #endif /* filesys/inode.h */
