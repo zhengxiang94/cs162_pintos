@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <list.h>
+#include "filesys/file.h"
 #include "filesys/filesys.h"
 #include "filesys/inode.h"
 #include "threads/malloc.h"
@@ -41,13 +42,6 @@ struct dir* dir_open(struct inode* inode) {
     free(dir);
     return NULL;
   }
-}
-
-struct dir* dir_open_pos(struct inode* inode, off_t pos) {
-  struct dir* dir = dir_open(inode);
-  if (dir != NULL)
-    dir->pos = pos;
-  return dir;
 }
 
 struct dir* dir_parent_open(struct inode* inode) {
@@ -285,6 +279,17 @@ bool dir_readdir(struct dir* dir, char name[NAME_MAX + 1]) {
   return false;
 }
 
+bool dir_readfile(struct file* file, char name[NAME_MAX + 1]) {
+  ASSERT(file);
+  struct dir dir;
+  dir.inode = file_get_inode(file);
+  dir.pos = file_tell(file);
+  bool success = dir_readdir(&dir, name);
+  if (success)
+    file_seek(file, dir.pos);
+  return success;
+}
+
 bool dir_is_valid(struct dir* dir) {
   return dir != NULL && dir->inode != NULL && !inode_is_remove(dir->inode);
 }
@@ -300,7 +305,5 @@ bool dir_is_empty(struct inode* inode) {
     }
   return true;
 }
-
-void dir_free(struct dir* dir) { free(dir); }
 
 block_sector_t get_dir_inumber(const struct dir* dir) { return inode_get_inumber(dir->inode); }

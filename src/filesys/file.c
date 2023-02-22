@@ -135,4 +135,10 @@ off_t file_tell(struct file* file) {
   return file->pos;
 }
 
-int get_inumber(const struct file* file) { return inode_get_inumber(file->inode); }
+bool file_is_dir(struct file* file) {
+  ASSERT(file != NULL);
+  struct inode* inode = file->inode;
+  return inode != NULL && inode_is_dir(inode);
+}
+
+int file_get_inumber(const struct file* file) { return inode_get_inumber(file->inode); }

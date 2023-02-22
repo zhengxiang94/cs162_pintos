@@ -198,18 +198,9 @@ bool filesys_isdir(struct file* file) {
 }
 
 bool filesys_readdir(struct file* file, char* name) {
-  struct inode* inode = file_get_inode(file);
-  bool success = false;
-  if (inode == NULL || !inode_is_dir(inode))
-    return success;
-  struct dir* dir = dir_open_pos(inode, file_tell(file));
-  if (dir != NULL) {
-    success = dir_readdir(dir, name);
-    if (success)
-      file_seek(file, dir_tell(dir));
-  }
-  dir_free(dir);
-  return success;
+  if (!file_is_dir(file))
+    return false;
+  return dir_readfile(file, name);
 }
 
 /* Formats the file system. */

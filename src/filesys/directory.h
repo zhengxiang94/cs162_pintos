@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "devices/block.h"
 #include "filesys/off_t.h"
+#include "filesys/file.h"
 
 /* Maximum length of a file name component.
    This is the traditional UNIX maximum length.
@@ -17,7 +18,6 @@ struct inode;
 /* Opening and closing directories. */
 bool dir_create(block_sector_t sector, size_t entry_cnt, block_sector_t parent_sector);
 struct dir* dir_open(struct inode*);
-struct dir* dir_open_pos(struct inode*, off_t pos);
 struct dir* dir_parent_open(struct inode*);
 struct dir* dir_open_cwd(const char*);
 struct dir* dir_open_root(void);
@@ -34,9 +34,9 @@ bool dir_add(struct dir*, const char* name, block_sector_t);
 bool dir_remove(struct dir*, const char* name);
 bool dir_remove_by_sector(struct dir*, const block_sector_t sector);
 bool dir_readdir(struct dir*, char name[NAME_MAX + 1]);
+bool dir_readfile(struct file*, char name[NAME_MAX + 1]);
 bool dir_is_valid(struct dir*);
 bool dir_is_empty(struct inode*);
-void dir_free(struct dir*);
 
 block_sector_t get_dir_inumber(const struct dir*);
 

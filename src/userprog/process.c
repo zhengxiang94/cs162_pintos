@@ -1036,7 +1036,7 @@ void pthread_exit_main(void) {
 }
 
 /* Insert into the files list and return fd*/
-int get_file_fd(struct file* file) {
+int file_to_fd(struct file* file) {
   struct process* pcb = thread_current()->pcb;
   if (pcb == NULL)
     return -1;
@@ -1052,7 +1052,7 @@ int get_file_fd(struct file* file) {
 
 /* Returns the open file with file descriptor fd. 
 Returns -1 if fd does not correspond to an entry in the file descriptor table. */
-struct file* get_file(int fd) {
+struct file* fd_to_file(int fd) {
   struct process* pcb = thread_current()->pcb;
   if (pcb == NULL)
     return NULL;
@@ -1101,19 +1101,6 @@ bool close_file(int fd) {
   return ret;
 }
 
-int read_for_syscall(int fd, void* buffer, unsigned size) {
-  struct process* pcb = thread_current()->pcb;
-  if (pcb == NULL)
-    return -1;
-  struct file* file = get_file(fd);
-  if (file == NULL)
-    return -1;
-  lock_acquire(&pcb->file_list_lock);
-  int ret = file_read(file, buffer, size);
-  lock_release(&pcb->file_list_lock);
-  return ret;
-}
-
 int open_for_syscall(const char* file) {
   lock_acquire(&file_lock);
   struct file* opened_file = filesys_open(file);
@@ -1121,17 +1108,7 @@ int open_for_syscall(const char* file) {
   if (opened_file == NULL) {
     return -1;
   }
-  return get_file_fd(opened_file);
-}
-
-int write_for_syscall(int fd, const void* buffer, unsigned size) {
-  struct file* file = get_file(fd);
-  if (file == NULL)
-    return -1;
-  lock_acquire(&file_lock);
-  int write_size = file_write(file, buffer, size);
-  lock_release(&file_lock);
-  return write_size;
+  return file_to_fd(opened_file);
 }
 
 bool syscall_lock_init(char* lock) {

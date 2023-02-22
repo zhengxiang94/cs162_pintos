@@ -62,12 +62,10 @@ bool syscall_sema_init(char* sema, int val);
 bool syscall_sema_down(char* sema);
 bool syscall_sema_up(char* sema);
 
-int get_file_fd(struct file* file);
-struct file* get_file(int fd);
+int file_to_fd(struct file* file);
+struct file* fd_to_file(int fd);
 bool close_file(int fd);
-int read_for_syscall(int fd, void* buffer, unsigned size);
 int open_for_syscall(const char* file);
-int write_for_syscall(int fd, const void* buffer, unsigned size);
 void set_ret_status(struct thread* t, int status);
 
 #endif /* userprog/process.h */

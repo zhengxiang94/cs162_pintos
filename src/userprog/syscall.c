@@ -3,7 +3,6 @@
 #include "devices/shutdown.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
-#include "filesys/inode.h"
 #include "pagedir.h"
 #include "stddef.h"
 #include "threads/thread.h"
@@ -35,15 +34,6 @@ static void syscall_exec(struct intr_frame* f, const char* cmd_line) {
   f->eax = pid;
 }
 
-static void syscall_wait(struct intr_frame* f, pid_t pid) {
-  int ret = process_wait(pid);
-  if (ret == TID_ERROR) {
-    f->eax = -1;
-    return;
-  }
-  f->eax = ret;
-}
-
 static void syscall_create(struct intr_frame* f, const char* file, unsigned initial_size) {
   if (!is_validity(f, file))
     return;
@@ -63,7 +53,7 @@ static void syscall_open(struct intr_frame* f, const char* file) {
 }
 
 static void syscall_file_size(struct intr_frame* f, int fd) {
-  struct file* file = get_file(fd);
+  struct file* file = fd_to_file(fd);
   if (file == NULL) {
     f->eax = -1;
     return;
@@ -71,34 +61,48 @@ static void syscall_file_size(struct intr_frame* f, int fd) {
   f->eax = file_length(file);
 }
 
-static void syscall_read(struct intr_frame* f, int fd, void* buffer, unsigned size) {
-  if (!is_validity(f, buffer))
-    return;
+static int syscall_read(int fd, void* buffer, unsigned size) {
   if (fd == 0) {
     char* buffer_vector = (char*)buffer;
     for (unsigned i = 0; i < size; i++) {
       uint8_t inputc = input_getc();
       buffer_vector[i] = inputc;
     }
-    f->eax = size;
-    return;
+    return size;
   }
-  f->eax = read_for_syscall(fd, buffer, size);
+
+  struct process* pcb = thread_current()->pcb;
+  if (pcb == NULL)
+    return -1;
+  struct file* file = fd_to_file(fd);
+  if (file == NULL)
+    return -1;
+  lock_acquire(&pcb->file_list_lock);
+  int ret = file_read(file, buffer, size);
+  lock_release(&pcb->file_list_lock);
+  return ret;
 }
 
-static void syscall_write(struct intr_frame* f, int fd, const void* buffer, unsigned size) {
-  if (!is_validity(f, buffer))
-    return;
+static int syscall_write(int fd, const void* buffer, unsigned size) {
   if (fd == 1) {
     putbuf((const char*)buffer, size);
-    f->eax = size;
-    return;
+    return size;
   }
-  f->eax = write_for_syscall(fd, buffer, size);
+
+  struct file* file = fd_to_file(fd);
+  if (file == NULL)
+    return -1;
+  struct process* pcb = thread_current()->pcb;
+  if (pcb == NULL)
+    return -1;
+  lock_acquire(&pcb->file_list_lock);
+  int write_size = file_write(file, buffer, size);
+  lock_release(&pcb->file_list_lock);
+  return write_size;
 }
 
 static void syscall_seek(struct intr_frame* f, int fd, unsigned position) {
-  struct file* file = get_file(fd);
+  struct file* file = fd_to_file(fd);
   if (file == NULL) {
     f->eax = -1;
     return;
@@ -107,7 +111,7 @@ static void syscall_seek(struct intr_frame* f, int fd, unsigned position) {
 }
 
 static void syscall_tell(struct intr_frame* f, int fd) {
-  struct file* file = get_file(fd);
+  struct file* file = fd_to_file(fd);
   if (file == NULL) {
     f->eax = -1;
     return;
@@ -133,7 +137,7 @@ static bool syscall_chdir(const char* dir) {
 static bool syscall_mkdir(const char* dir) { return filesys_mkdir(dir); }
 
 static bool syscall_readdir(int fd, char* name) {
-  struct file* file = get_file(fd);
+  struct file* file = fd_to_file(fd);
   if (file == NULL) {
     return false;
   }
@@ -141,7 +145,7 @@ static bool syscall_readdir(int fd, char* name) {
 }
 
 static bool syscall_isdir(int fd) {
-  struct file* file = get_file(fd);
+  struct file* file = fd_to_file(fd);
   if (file == NULL) {
     return false;
   }
@@ -149,10 +153,10 @@ static bool syscall_isdir(int fd) {
 }
 
 static int syscall_inumber(int fd) {
-  struct file* file = get_file(fd);
+  struct file* file = fd_to_file(fd);
   if (file == NULL)
     return -1;
-  return get_inumber(file);
+  return file_get_inumber(file);
 }
 
 static void syscall_handler(struct intr_frame*);
@@ -167,6 +171,8 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
   switch (syscall_type) {
     case SYS_READ:
     case SYS_WRITE:
+      if (!is_validity(f, (char*)args[2]))
+        return;
     case SYS_PT_CREATE:
       if (!is_validity(f, (char*)(args + 0x10)))
         return;
@@ -224,7 +230,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       syscall_exec(f, (char*)args[1]);
       break;
     case SYS_WAIT:
-      syscall_wait(f, args[1]);
+      f->eax = process_wait(args[1]);
       break;
     case SYS_CREATE:
       syscall_create(f, (char*)args[1], args[2]);
@@ -239,10 +245,10 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       syscall_file_size(f, args[1]);
       break;
     case SYS_READ:
-      syscall_read(f, args[1], (char*)args[2], args[3]);
+      f->eax = syscall_read(args[1], (char*)args[2], args[3]);
       break;
     case SYS_WRITE:
-      syscall_write(f, args[1], (char*)args[2], args[3]);
+      f->eax = syscall_write(args[1], (char*)args[2], args[3]);
       break;
     case SYS_SEEK:
       syscall_seek(f, args[1], args[2]);
