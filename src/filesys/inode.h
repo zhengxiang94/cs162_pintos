@@ -24,4 +24,10 @@ bool inode_is_dir(const struct inode*);
 bool inode_is_remove(const struct inode*);
 block_sector_t inode_get_parent_dir(const struct inode*);
 
+/* Core cache interface. */
+void buffer_cache_init(void);
+void buffer_cache_read(block_sector_t sector, void* buffer);
+void buffer_cache_write(block_sector_t sector, const void* buffer);
+void buffer_cache_flush(void);
+
 #endif /* filesys/inode.h */

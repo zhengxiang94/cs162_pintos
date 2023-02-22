@@ -1,5 +1,7 @@
 #include "filesys/inode.h"
 #include <list.h>
+#include <hash.h>
+#include <bitmap.h>
 #include <debug.h>
 #include <round.h>
 #include <stddef.h>
@@ -9,6 +11,9 @@
 #include "filesys/off_t.h"
 #include "stdbool.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
+#include "threads/thread.h"
+#include "devices/timer.h"
 
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
@@ -53,6 +58,21 @@ struct inode {
   struct inode_disk data; /* Inode content. */
 };
 
+/* Core cache interface. */
+void* buffer_cache_get(block_sector_t sector);
+void buffer_cache_release(void* cache_block, bool dirty);
+
+#define NUM_SECTORS 64
+#define WRITE_DELAY 30000
+
+struct cache_entry {
+  block_sector_t sector;
+  size_t index;
+  struct condition queue;
+  struct hash_elem elem;
+  bool dirty;
+};
+
 /* Returns the block device sector that contains byte offset POS
    within INODE.
    Returns -1 if INODE does not contain data for a byte at offset
@@ -65,20 +85,20 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos) {
       return inode->data.direct[n_sector];
     if (n_sector < NUM_DIRECT_PLUS_INDIRECT) {
       struct indirect_block* indirect_block = malloc(BLOCK_SECTOR_SIZE);
-      block_read(fs_device, inode->data.indirect, indirect_block);
+      buffer_cache_read(inode->data.indirect, indirect_block);
       block_sector_t indirect_sector = indirect_block->direct[n_sector - NUM_DIRECT];
       free(indirect_block);
       return indirect_sector;
     }
 
     struct doubly_indirect_block* doubly_indirect_block = malloc(BLOCK_SECTOR_SIZE);
-    block_read(fs_device, inode->data.doubly_indirect, doubly_indirect_block);
+    buffer_cache_read(inode->data.doubly_indirect, doubly_indirect_block);
     size_t n_indirect = (n_sector - NUM_DIRECT_PLUS_INDIRECT) / NUM_INDIRECT;
     block_sector_t indirect_block_sector = doubly_indirect_block->indirect_block[n_indirect];
     free(doubly_indirect_block);
 
     struct indirect_block indirect_block;
-    block_read(fs_device, indirect_block_sector, &indirect_block);
+    buffer_cache_read(indirect_block_sector, &indirect_block);
     size_t index_indirect_block = (n_sector - NUM_DIRECT_PLUS_INDIRECT) % NUM_INDIRECT;
     if (indirect_block.direct[index_indirect_block] > 4096) {
       PANIC("byte_to_sector (pos=%" PRDSNu ", "
@@ -93,7 +113,7 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos) {
 
 static void block_write_zero(block_sector_t sector) {
   static char zeros[BLOCK_SECTOR_SIZE];
-  block_write(fs_device, sector, zeros);
+  buffer_cache_write(sector, zeros);
 }
 
 static bool allocate_direct_blocks(struct inode_disk* inode, block_sector_t start,
@@ -148,11 +168,11 @@ static bool allocate_indirect_blocks(struct inode_disk* inode, block_sector_t st
   block_sector_t indirect_end = end - NUM_DIRECT;
 
   struct indirect_block* indirect_block = malloc(BLOCK_SECTOR_SIZE);
-  block_read(fs_device, inode->indirect, indirect_block);
+  buffer_cache_read(inode->indirect, indirect_block);
 
   bool success = allocate_indirect_block(indirect_block, indirect_start, indirect_end);
   if (success)
-    block_write(fs_device, inode->indirect, indirect_block);
+    buffer_cache_write(inode->indirect, indirect_block);
 
   free(indirect_block);
   return success;
@@ -162,7 +182,7 @@ static void release_indirect_blocks(struct inode_disk* inode, block_sector_t end
   ASSERT(end <= NUM_DIRECT_PLUS_INDIRECT);
 
   struct indirect_block* indirect_block = malloc(BLOCK_SECTOR_SIZE);
-  block_read(fs_device, inode->indirect, indirect_block);
+  buffer_cache_read(inode->indirect, indirect_block);
 
   block_sector_t indirect_end = end - NUM_DIRECT;
   for (size_t i = 0; i <= indirect_end; i++)
@@ -176,7 +196,7 @@ static bool allocate_doubly_indirect_blocks(struct inode_disk* inode, block_sect
   ASSERT(start >= NUM_DIRECT_PLUS_INDIRECT);
   ASSERT(end <= MAX_BLOCK);
   struct doubly_indirect_block* doubly_indirect = malloc(BLOCK_SECTOR_SIZE);
-  block_read(fs_device, inode->doubly_indirect, doubly_indirect);
+  buffer_cache_read(inode->doubly_indirect, doubly_indirect);
   block_sector_t doubly_indirect_start = start - NUM_DIRECT_PLUS_INDIRECT;
   block_sector_t doubly_indirect_end = end - NUM_DIRECT_PLUS_INDIRECT;
   block_sector_t blocks_start = doubly_indirect_start / NUM_INDIRECT;
@@ -191,7 +211,7 @@ static bool allocate_doubly_indirect_blocks(struct inode_disk* inode, block_sect
     }
 
     struct indirect_block* indirect_block = malloc(BLOCK_SECTOR_SIZE);
-    block_read(fs_device, doubly_indirect->indirect_block[i], indirect_block);
+    buffer_cache_read(doubly_indirect->indirect_block[i], indirect_block);
 
     block_sector_t indirect_start = i == blocks_start ? doubly_indirect_start % NUM_INDIRECT : 0;
     block_sector_t indirect_end =
@@ -202,11 +222,11 @@ static bool allocate_doubly_indirect_blocks(struct inode_disk* inode, block_sect
       goto done;
     }
 
-    block_write(fs_device, doubly_indirect->indirect_block[i], indirect_block);
+    buffer_cache_write(doubly_indirect->indirect_block[i], indirect_block);
     free(indirect_block);
   }
 
-  block_write(fs_device, inode->doubly_indirect, doubly_indirect);
+  buffer_cache_write(inode->doubly_indirect, doubly_indirect);
 done:
   free(doubly_indirect);
   return true;
@@ -215,14 +235,14 @@ done:
 static void release_doubly_indirect_blocks(struct inode_disk* inode, block_sector_t end) {
   ASSERT(end <= MAX_BLOCK);
   struct doubly_indirect_block* doubly_indirect = malloc(BLOCK_SECTOR_SIZE);
-  block_read(fs_device, inode->doubly_indirect, doubly_indirect);
+  buffer_cache_read(inode->doubly_indirect, doubly_indirect);
 
   block_sector_t doubly_indirect_end = end - NUM_DIRECT_PLUS_INDIRECT;
   block_sector_t blocks_end = doubly_indirect_end / NUM_INDIRECT;
 
   for (size_t i = 0; i <= blocks_end; i++) {
     struct indirect_block* indirect_block = malloc(BLOCK_SECTOR_SIZE);
-    block_read(fs_device, doubly_indirect->indirect_block[i], indirect_block);
+    buffer_cache_read(doubly_indirect->indirect_block[i], indirect_block);
 
     if (i == blocks_end) {
       block_sector_t indirect_end = doubly_indirect_end % NUM_INDIRECT;
@@ -330,7 +350,10 @@ static bool extend_inode_length(struct inode_disk* inode, off_t length) {
 static struct list open_inodes;
 
 /* Initializes the inode module. */
-void inode_init(void) { list_init(&open_inodes); }
+void inode_init(void) {
+  list_init(&open_inodes);
+  buffer_cache_init();
+}
 
 /* Initializes an inode with LENGTH bytes of data and
    writes the new inode to sector SECTOR on the file system
@@ -359,7 +382,7 @@ bool inode_create_with_dir_info(block_sector_t sector, off_t length, block_secto
     disk_inode->length = 0;
     disk_inode->magic = INODE_MAGIC;
     if (extend_inode_length(disk_inode, length)) {
-      block_write(fs_device, sector, disk_inode);
+      buffer_cache_write(sector, disk_inode);
       success = true;
     }
     free(disk_inode);
@@ -394,7 +417,7 @@ struct inode* inode_open(block_sector_t sector) {
   inode->open_cnt = 1;
   inode->deny_write_cnt = 0;
   inode->removed = false;
-  block_read(fs_device, inode->sector, &inode->data);
+  buffer_cache_read(inode->sector, &inode->data);
   return inode;
 }
 
@@ -468,7 +491,7 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
 
     if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
       /* Read full sector directly into caller's buffer. */
-      block_read(fs_device, sector_idx, buffer + bytes_read);
+      buffer_cache_read(sector_idx, buffer + bytes_read);
     } else {
       /* Read sector into bounce buffer, then partially copy
              into caller's buffer. */
@@ -477,7 +500,7 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
         if (bounce == NULL)
           break;
       }
-      block_read(fs_device, sector_idx, bounce);
+      buffer_cache_read(sector_idx, bounce);
       memcpy(buffer + bytes_read, bounce + sector_ofs, chunk_size);
     }
 
@@ -503,7 +526,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
   if (length > inode->data.length) {
     if (!extend_inode_length(&inode->data, length))
       return 0;
-    block_write(fs_device, inode->sector, &inode->data);
+    buffer_cache_write(inode->sector, &inode->data);
   }
 
   const uint8_t* buffer = buffer_;
@@ -530,7 +553,7 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
 
     if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
       /* Write full sector directly to disk. */
-      block_write(fs_device, sector_idx, buffer + bytes_written);
+      buffer_cache_write(sector_idx, buffer + bytes_written);
     } else {
       /* We need a bounce buffer. */
       if (bounce == NULL) {
@@ -543,11 +566,11 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
              we're writing, then we need to read in the sector
              first.  Otherwise we start with a sector of all zeros. */
       if (sector_ofs > 0 || chunk_size < sector_left)
-        block_read(fs_device, sector_idx, bounce);
+        buffer_cache_read(sector_idx, bounce);
       else
         memset(bounce, 0, BLOCK_SECTOR_SIZE);
       memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
-      block_write(fs_device, sector_idx, bounce);
+      buffer_cache_write(sector_idx, bounce);
     }
 
     /* Advance. */
@@ -582,3 +605,174 @@ off_t inode_length(const struct inode* inode) { return inode->data.length; }
 bool inode_is_dir(const struct inode* inode) { return inode != NULL && inode->data.is_dir; }
 
 block_sector_t inode_get_parent_dir(const struct inode* inode) { return inode->data.parent_dir; }
+
+static void* cache_base;                         /* Points to the base of the buffer cache. */
+static size_t clock_hand;                        /* Used for clock replacement. */
+static struct cache_entry* entries[NUM_SECTORS]; /* Array of cache entry refs. */
+static struct bitmap* refbits;                   /* Reference bits for clock replacement. */
+static struct bitmap* usebits;                   /* Marked for each locked entry. */
+static struct hash hashmap;                      /* Maps sector indices to cache entries. */
+static struct lock cache_lock;                   /* Acquire before accessing cache metadata. */
+static struct condition cache_queue;             /* Block if all cache entries are in use. */
+
+static void* index_to_block_buffer(size_t index);
+static bool find_entry(block_sector_t sector, struct cache_entry**);
+unsigned hash_function(const struct hash_elem* e, void* aux);
+bool less_function(const struct hash_elem* a, const struct hash_elem* b, void* aux);
+void write_behind_thread_func(void* aux);
+
+/* Initializes the buffer cache. */
+void buffer_cache_init(void) {
+  cache_base = palloc_get_multiple(PAL_ASSERT, 8);
+  clock_hand = 0;
+  refbits = bitmap_create(NUM_SECTORS);
+  usebits = bitmap_create(NUM_SECTORS);
+  hash_init(&hashmap, hash_function, less_function, NULL);
+  lock_init(&cache_lock);
+  cond_init(&cache_queue);
+  thread_create("write-behind", PRI_MAX, write_behind_thread_func, NULL);
+}
+
+/* Checks if SECTOR is in the buffer cache, and if it is not,
+   loads SECTOR into a cache block. "Locks" the corresponding
+   cache entry until buffer_cache_release () is called.
+   Returns the cache block containing SECTOR's contents. */
+void* buffer_cache_get(block_sector_t sector) {
+  struct cache_entry* e;
+  bool cache_hit;
+
+  lock_acquire(&cache_lock);
+  cache_hit = find_entry(sector, &e);
+  lock_release(&cache_lock);
+
+  if (!cache_hit)
+    block_read(fs_device, sector, index_to_block_buffer(e->index));
+
+  return index_to_block_buffer(e->index);
+}
+
+/* Releases the "lock" on the cache entry associated with
+   the block at CACHE_BLOCK. The parameter DIRTY should
+   be marked true if the contents of CACHE_BLOCK were
+   modified since it was returned by buffer_cache_get (). */
+void buffer_cache_release(void* cache_block, bool dirty) {
+  int index = (cache_block - cache_base) / BLOCK_SECTOR_SIZE;
+
+  ASSERT(index >= 0 && index < NUM_SECTORS);
+  ASSERT(bitmap_test(usebits, index));
+
+  lock_acquire(&cache_lock);
+
+  if (dirty)
+    entries[index]->dirty = true;
+
+  bitmap_mark(refbits, index);
+  bitmap_reset(usebits, index);
+  cond_signal(&entries[index]->queue, &cache_lock);
+  cond_signal(&cache_queue, &cache_lock);
+
+  lock_release(&cache_lock);
+}
+
+/* Flushes all dirty cache entries to disk. */
+void buffer_cache_flush(void) {
+  size_t i = 0;
+  lock_acquire(&cache_lock);
+  for (; i < NUM_SECTORS; i++)
+    if (entries[i] != NULL && entries[i]->dirty && !bitmap_test(usebits, i)) {
+      block_write(fs_device, entries[i]->sector, index_to_block_buffer(i));
+      entries[i]->dirty = false;
+    }
+  lock_release(&cache_lock);
+}
+
+/* Reads SECTOR into BUFFER. */
+void buffer_cache_read(block_sector_t sector, void* buffer) {
+  void* cache_block = buffer_cache_get(sector);
+  memcpy(buffer, cache_block, BLOCK_SECTOR_SIZE);
+  buffer_cache_release(cache_block, false);
+}
+
+/* Writes BLOCK_SECTOR_SIZE bytes from BUFFER into SECTOR. */
+void buffer_cache_write(block_sector_t sector, const void* buffer) {
+  struct cache_entry* e;
+
+  lock_acquire(&cache_lock);
+  find_entry(sector, &e);
+  lock_release(&cache_lock);
+
+  void* cache_block = index_to_block_buffer(e->index);
+  memcpy(cache_block, buffer, BLOCK_SECTOR_SIZE);
+  buffer_cache_release(cache_block, true);
+}
+
+/* Returns a pointer to the (INDEX + 1)th cache block. */
+static void* index_to_block_buffer(size_t index) { return cache_base + BLOCK_SECTOR_SIZE * index; }
+
+/* Checks if SECTOR is in the buffer cache, and if it is not,
+   allocates a cache block for it. "Locks" the corresponding
+   cache entry and stores it in ENTRY.
+   Returns true on a cache hit, false otherwise. */
+static bool find_entry(block_sector_t sector, struct cache_entry** entry) {
+  struct cache_entry* e = malloc(sizeof(struct cache_entry));
+  e->sector = sector;
+
+  /* Wait if all the cache blocks are in use. */
+  while (bitmap_all(usebits, 0, NUM_SECTORS))
+    cond_wait(&cache_queue, &cache_lock);
+
+  struct hash_elem* found = hash_insert(&hashmap, &e->elem);
+  if (found == NULL) {
+
+    /* Clock algorithm. */
+    while (bitmap_test(refbits, clock_hand) || bitmap_test(usebits, clock_hand)) {
+      bitmap_reset(refbits, clock_hand);
+      clock_hand = (clock_hand + 1) % NUM_SECTORS;
+    }
+
+    /* Evict entry and write contents to disk. */
+    struct cache_entry* old_entry = entries[clock_hand];
+    if (old_entry != NULL) {
+      block_write(fs_device, old_entry->sector, index_to_block_buffer(old_entry->index));
+      hash_delete(&hashmap, &old_entry->elem);
+      free(old_entry);
+    }
+
+    /* Initialize new entry. */
+    cond_init(&e->queue);
+    e->dirty = false;
+    e->index = clock_hand;
+    entries[e->index] = e;
+    clock_hand = (clock_hand + 1) % NUM_SECTORS;
+  } else {
+    free(e);
+    e = hash_entry(found, struct cache_entry, elem);
+  }
+
+  /* Wait for your turn to acquire entry. */
+  while (bitmap_test(usebits, e->index))
+    cond_wait(&e->queue, &cache_lock);
+  bitmap_mark(usebits, e->index);
+
+  *entry = e;
+  return (found != NULL);
+}
+
+/* Just returns the sector number. The hash map automagically
+   grows its number of buckets in powers of two and masks
+   off the appropriate number of higher nibble bits. */
+unsigned hash_function(const struct hash_elem* e, void* aux UNUSED) {
+  return hash_entry(e, struct cache_entry, elem)->sector;
+}
+
+bool less_function(const struct hash_elem* a, const struct hash_elem* b, void* aux UNUSED) {
+  return hash_function(a, NULL) < hash_function(b, NULL);
+}
+
+/* High-priority write-behind thread. */
+void write_behind_thread_func(void* aux UNUSED) {
+  while (true) {
+    timer_msleep(WRITE_DELAY);
+    buffer_cache_flush();
+  }
+}
